@@ -1,0 +1,1200 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>J.A.R.V.I.S</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;600;700;900&family=Share+Tech+Mono&display=swap');
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --c:#00d8ff;--c2:#0088aa;--g:#00ff99;--a:#ff6a00;--r:#ff2244;--p:#9955ff;
+  --f:'Share Tech Mono',monospace;--fo:'Orbitron',monospace;
+}
+html,body{width:100%;height:100%;overflow:hidden;background:#000;cursor:none;
+  font-family:var(--f);color:var(--c);user-select:none}
+
+#cv{position:fixed;inset:0;width:100%;height:100%;z-index:0}
+
+/* cursor */
+#cur{position:fixed;z-index:999;pointer-events:none;transform:translate(-50%,-50%);width:22px;height:22px}
+#cur svg{width:100%;height:100%}
+#cur.pinch svg .inner{fill:rgba(0,216,255,0.25)}
+
+/* cam feed — small corner, always visible when on */
+#cam-feed{position:fixed;bottom:54px;left:14px;width:120px;height:90px;
+  border:1px solid rgba(0,216,255,0.22);z-index:50;opacity:0.5;
+  object-fit:cover;transform:scaleX(-1);border-radius:2px;display:none}
+#cam-feed.on{display:block}
+#cam-ov{position:fixed;bottom:54px;left:14px;width:120px;height:90px;
+  z-index:51;pointer-events:none;border-radius:2px;display:none}
+#cam-ov.on{display:block}
+
+/* identify */
+#id{position:fixed;inset:0;z-index:900;background:#000;
+  display:flex;align-items:center;justify-content:center;flex-direction:column;gap:22px;
+  font-family:var(--fo)}
+.idt{font-size:clamp(12px,2vw,22px);letter-spacing:0.5em;color:var(--c);
+  text-shadow:0 0 40px rgba(0,216,255,0.6);animation:flk 4s infinite}
+@keyframes flk{0%,88%,94%,100%{opacity:1}91%{opacity:0.2}96%{opacity:0.55}}
+.idframe{position:relative;padding:16px 32px}
+.idc{position:absolute;width:13px;height:13px;border-color:var(--a);border-style:solid}
+.idc.tl{top:0;left:0;border-width:2px 0 0 2px}.idc.tr{top:0;right:0;border-width:2px 2px 0 0}
+.idc.bl{bottom:0;left:0;border-width:0 0 2px 2px}.idc.br{bottom:0;right:0;border-width:0 2px 2px 0}
+#id-in{background:transparent;border:none;border-bottom:1px solid rgba(0,216,255,0.4);
+  color:var(--c);font-family:var(--fo);font-size:15px;letter-spacing:0.28em;
+  text-align:center;width:270px;padding:7px;outline:none;display:block}
+#id-in::placeholder{color:rgba(0,216,255,0.2);font-size:9px;letter-spacing:0.3em}
+#id-hint{font-size:8px;letter-spacing:0.3em;color:rgba(0,216,255,0.3)}
+#id-bar{width:270px;height:1px;background:rgba(0,216,255,0.07);margin-top:4px;overflow:hidden}
+#id-fill{height:100%;background:var(--c);width:0;transition:width 1.8s ease;box-shadow:0 0 8px var(--c)}
+#id-err{font-size:8px;letter-spacing:0.2em;color:var(--a);min-height:12px;margin-top:4px}
+
+
+
+/* notif */
+#notif{position:fixed;top:8px;left:50%;transform:translateX(-50%);z-index:200;
+  font-size:8px;letter-spacing:0.22em;text-transform:uppercase;
+  background:rgba(0,3,10,0.96);border:1px solid rgba(0,216,255,0.25);
+  border-radius:1px;padding:4px 14px;color:var(--c);
+  opacity:0;transition:opacity 0.3s;pointer-events:none;white-space:nowrap}
+#notif.on{opacity:1}
+
+/* UI overlay */
+#ui{position:fixed;inset:0;z-index:10;pointer-events:none}
+
+/* TOP LEFT */
+#tl{position:absolute;top:14px;left:16px;display:flex;align-items:center;gap:13px}
+#analog{width:54px;height:54px;flex-shrink:0}
+.logo{font-family:var(--fo);font-size:13px;font-weight:900;letter-spacing:0.45em;
+  color:var(--c);text-shadow:0 0 22px rgba(0,216,255,0.5)}
+.logo-sub{font-size:7px;letter-spacing:0.28em;color:rgba(0,216,255,0.3);margin-top:1px}
+#ai-tag{font-size:8px;letter-spacing:0.15em;color:rgba(0,216,255,0.4);margin-top:4px}
+#mic-ind{display:flex;align-items:center;gap:5px;margin-top:3px;font-size:8px;
+  letter-spacing:0.15em;color:rgba(0,216,255,0.35)}
+#mic-dot{width:5px;height:5px;border-radius:50%;background:var(--r);transition:all 0.3s;flex-shrink:0}
+#mic-dot.on{background:var(--g);box-shadow:0 0 8px var(--g);animation:mdp 1s ease-in-out infinite}
+@keyframes mdp{0%,100%{opacity:1}50%{opacity:0.25}}
+#cam-ind{display:flex;align-items:center;gap:5px;font-size:8px;letter-spacing:0.15em;color:rgba(0,216,255,0.35)}
+#cam-dot{width:5px;height:5px;border-radius:50%;background:var(--r);transition:all 0.3s;flex-shrink:0}
+#cam-dot.on{background:var(--g);box-shadow:0 0 8px var(--g)}
+
+/* TOP RIGHT */
+#tr{position:absolute;top:12px;right:16px;text-align:right}
+#big-time{font-family:var(--fo);font-size:clamp(34px,5.5vw,62px);font-weight:900;
+  color:var(--c);letter-spacing:0.05em;line-height:1;
+  text-shadow:0 0 40px rgba(0,216,255,0.55),0 0 80px rgba(0,216,255,0.18)}
+#big-day{font-size:10px;letter-spacing:0.35em;color:rgba(0,216,255,0.45);text-transform:uppercase}
+#big-date-str{font-size:9px;letter-spacing:0.18em;color:rgba(0,216,255,0.3);text-transform:uppercase;margin-bottom:7px}
+.wtemp{font-family:var(--fo);font-size:26px;color:var(--c);text-shadow:0 0 20px rgba(0,216,255,0.4);line-height:1}
+.wcity{font-size:8px;letter-spacing:0.2em;color:rgba(0,216,255,0.4);margin-bottom:2px}
+.wcond{font-size:9px;letter-spacing:0.12em;color:var(--a);margin-bottom:5px}
+.wrow{font-size:8px;letter-spacing:0.1em;color:rgba(0,216,255,0.38);line-height:2}
+.wrow span{color:var(--c)}
+
+/* LEFT DATA */
+#ld{position:absolute;left:16px;top:50%;transform:translateY(-44%);
+  display:flex;flex-direction:column;gap:13px}
+.drow{display:flex;align-items:flex-start;gap:10px}
+.dicon{width:22px;height:22px;border:1px solid rgba(0,216,255,0.35);border-radius:50%;
+  display:flex;align-items:center;justify-content:center;
+  font-family:var(--fo);font-size:9px;color:var(--c);flex-shrink:0;margin-top:2px}
+.dnums{display:flex;flex-direction:column;gap:2px}
+.dbig{font-size:10px;letter-spacing:0.1em;color:var(--c)}
+.dsmall{font-size:8px;letter-spacing:0.07em;color:rgba(0,216,255,0.38)}
+.dbar{width:96px;height:2px;background:rgba(0,216,255,0.09);border-radius:1px}
+.dfill{height:100%;border-radius:1px;transition:width 1.4s ease}
+.fc{background:linear-gradient(90deg,var(--c2),var(--c))}
+.fg{background:linear-gradient(90deg,#006644,var(--g))}
+.fa{background:linear-gradient(90deg,#882200,var(--a))}
+
+/* LINKS */
+#links-wrap{margin-top:4px}
+.lsec{font-size:7px;letter-spacing:0.3em;color:rgba(0,216,255,0.22);text-transform:uppercase;margin-bottom:3px}
+.litem{font-size:9px;letter-spacing:0.15em;color:rgba(0,216,255,0.38);
+  cursor:pointer;pointer-events:auto;transition:color 0.15s;padding:1px 0;display:block}
+.litem:hover{color:var(--c);text-shadow:0 0 8px rgba(0,216,255,0.4)}
+.litem::before{content:'▸ ';opacity:0.45}
+
+/* RIGHT DATA */
+#rd{position:absolute;right:16px;top:50%;transform:translateY(-44%);
+  text-align:right;display:flex;flex-direction:column;gap:11px}
+.rstat{font-size:8px;letter-spacing:0.1em;color:rgba(0,216,255,0.38);line-height:1.5}
+.rstat span{font-size:10px;color:var(--c);letter-spacing:0.08em;display:block}
+
+/* SPOKE — JARVIS speech text, no chat box */
+#spoke{position:absolute;bottom:60px;left:50%;transform:translateX(-50%);
+  text-align:center;pointer-events:none;min-width:500px;max-width:72vw;
+  opacity:0;transition:opacity 0.35s ease}
+#spoke.on{opacity:1}
+#spoke-main{font-family:var(--fo);font-size:clamp(10px,1.5vw,16px);
+  letter-spacing:0.14em;color:var(--c);
+  text-shadow:0 0 22px rgba(0,216,255,0.55);text-transform:uppercase;line-height:1.5}
+#spoke-sub{font-size:8px;letter-spacing:0.18em;color:rgba(0,216,255,0.4);margin-top:3px;text-transform:uppercase}
+
+/* mic ring pulse */
+#mpulse{position:fixed;bottom:106px;left:50%;transform:translateX(-50%);
+  width:8px;height:8px;border-radius:50%;background:var(--r);opacity:0.35;
+  transition:all 0.3s;pointer-events:none;z-index:20}
+#mpulse.on{background:var(--g);opacity:1;
+  box-shadow:0 0 10px var(--g),0 0 22px rgba(0,255,153,0.3);
+  animation:mpp 0.85s ease-in-out infinite}
+@keyframes mpp{0%,100%{transform:translateX(-50%) scale(1)}50%{transform:translateX(-50%) scale(2)}}
+
+/* BOTTOM CORNERS */
+#bl{position:absolute;bottom:56px;left:16px;font-size:8px;letter-spacing:0.13em;
+  color:rgba(0,216,255,0.3);line-height:2}
+#bl span{color:rgba(0,216,255,0.6)}
+#br{position:absolute;bottom:56px;right:16px;text-align:right;
+  font-size:8px;letter-spacing:0.13em;color:rgba(0,216,255,0.3);line-height:2}
+#br span{color:rgba(0,216,255,0.6)}
+
+/* MODEL ROW */
+#mrow{position:absolute;bottom:58px;left:50%;transform:translateX(-50%);
+  display:flex;gap:3px;pointer-events:auto;opacity:0.4;transition:opacity 0.2s}
+#mrow:hover{opacity:1}
+.mb{font-family:var(--f);font-size:7px;letter-spacing:0.1em;text-transform:uppercase;
+  padding:2px 7px;border:1px solid rgba(0,216,255,0.12);background:transparent;
+  color:rgba(0,150,190,0.5);border-radius:1px;cursor:pointer;transition:all 0.15s;pointer-events:auto}
+.mb:hover{border-color:rgba(0,216,255,0.35);color:var(--c)}
+.mb.on{border-color:rgba(0,216,255,0.5);color:var(--c);background:rgba(0,40,80,0.4)}
+
+/* API row */
+#apirow{position:absolute;bottom:16px;right:16px;display:flex;gap:4px;
+  pointer-events:auto;opacity:0.28;transition:opacity 0.2s}
+#apirow:hover{opacity:1}
+#api-in{background:rgba(0,3,12,0.9);border:1px solid rgba(0,216,255,0.12);
+  color:rgba(0,216,255,0.7);font-family:var(--f);font-size:7px;
+  padding:3px 6px;border-radius:1px;width:138px;outline:none;letter-spacing:0.05em}
+#api-in::placeholder{color:rgba(0,216,255,0.18);font-size:6px}
+#api-sel{background:rgba(0,3,12,0.9);border:1px solid rgba(0,216,255,0.12);
+  color:rgba(0,150,190,0.6);font-family:var(--f);font-size:7px;
+  padding:3px 4px;border-radius:1px;outline:none;cursor:pointer}
+
+/* BOTTOM BAR */
+#bot{position:fixed;bottom:0;left:0;right:0;height:48px;
+  background:rgba(0,3,12,0.75);border-top:1px solid rgba(0,216,255,0.08);
+  display:flex;align-items:center;padding:0 16px;gap:0;z-index:15}
+.bi{font-size:8px;letter-spacing:0.14em;color:rgba(0,216,255,0.33);
+  display:flex;align-items:center;gap:6px;flex-shrink:0}
+.bv{color:var(--c);font-size:9px;font-weight:bold}
+.bs{width:1px;height:18px;background:rgba(0,216,255,0.09);margin:0 13px}
+#bat-wrap{width:120px;height:7px;background:rgba(0,216,255,0.08);
+  border:1px solid rgba(0,216,255,0.2);border-radius:1px;position:relative}
+#bat-fill{height:100%;border-radius:1px;transition:width 2s ease}
+#bat-nub{width:3px;height:3px;background:rgba(0,216,255,0.3);border-radius:0 1px 1px 0;
+  position:absolute;right:-3px;top:50%;transform:translateY(-50%)}
+</style>
+</head>
+<body>
+
+<canvas id="cv"></canvas>
+
+<!-- hidden video source for gesture only -->
+<video id="vid-hidden" autoplay playsinline muted style="position:fixed;opacity:0;width:1px;height:1px;top:0;left:0"></video>
+<!-- visible cam preview -->
+<video id="cam-feed" autoplay playsinline muted></video>
+<canvas id="cam-ov"></canvas>
+
+<!-- cursor -->
+<div id="cur">
+  <svg viewBox="0 0 22 22" fill="none">
+    <circle cx="11" cy="11" r="9" stroke="rgba(0,216,255,0.4)" stroke-width="0.5"/>
+    <circle class="inner" cx="11" cy="11" r="2.5" fill="rgba(0,216,255,0.06)" stroke="rgba(0,216,255,0.75)" stroke-width="0.8"/>
+    <line x1="11" y1="1.5" x2="11" y2="6" stroke="rgba(0,216,255,0.5)" stroke-width="0.7"/>
+    <line x1="11" y1="16" x2="11" y2="20.5" stroke="rgba(0,216,255,0.5)" stroke-width="0.7"/>
+    <line x1="1.5" y1="11" x2="6" y2="11" stroke="rgba(0,216,255,0.5)" stroke-width="0.7"/>
+    <line x1="16" y1="11" x2="20.5" y2="11" stroke="rgba(0,216,255,0.5)" stroke-width="0.7"/>
+  </svg>
+</div>
+
+<!-- identify -->
+<div id="id">
+  <div class="idt">PLEASE IDENTIFY YOURSELF</div>
+  <div class="idframe">
+    <div class="idc tl"></div><div class="idc tr"></div>
+    <div class="idc bl"></div><div class="idc br"></div>
+    <input id="id-in" placeholder="ENTER YOUR NAME" autocomplete="off" spellcheck="false">
+    <div id="id-bar"><div id="id-fill"></div></div>
+  </div>
+  <div id="id-hint" style="font-size:8px;letter-spacing:0.3em;color:rgba(0,216,255,0.3)">TYPE YOUR NAME THEN CLICK LAUNCH</div>
+  <!-- MUST be a real click — getUserMedia requires synchronous click handler -->
+  <button id="launch-btn" style="
+    font-family:var(--fo);font-size:10px;letter-spacing:0.3em;text-transform:uppercase;
+    padding:10px 32px;border:1px solid rgba(0,216,255,0.5);background:transparent;
+    color:var(--c);cursor:pointer;border-radius:2px;margin-top:8px;
+    text-shadow:0 0 12px rgba(0,216,255,0.4);
+    transition:all 0.2s;pointer-events:auto;
+    box-shadow:0 0 20px rgba(0,216,255,0.1)">
+    LAUNCH INTERFACE
+  </button>
+  <div id="id-err" style="font-size:8px;letter-spacing:0.2em;color:var(--a);min-height:12px;margin-top:6px"></div>
+</div>
+
+<!-- permission prompt removed — permissions triggered directly from Enter keypress -->
+
+<div id="notif"></div>
+
+<!-- UI -->
+<div id="ui">
+
+  <div id="tl">
+    <canvas id="analog" width="54" height="54"></canvas>
+    <div>
+      <div class="logo">J·A·R·V·I·S</div>
+      <div class="logo-sub">SPATIAL INTELLIGENCE v4.1</div>
+      <div id="ai-tag">MODEL: <span id="mlbl">LLAMA 3</span></div>
+      <div id="mic-ind"><div id="mic-dot"></div><span id="mic-lbl">MIC OFFLINE</span></div>
+      <div id="cam-ind"><div id="cam-dot"></div><span id="cam-lbl">CAM OFFLINE</span></div>
+    </div>
+  </div>
+
+  <div id="tr">
+    <div id="big-time">--:--</div>
+    <div id="big-day">---</div>
+    <div id="big-date-str">---</div>
+    <div class="wtemp" id="wtemp">--°C</div>
+    <div class="wcity" id="wcity">LOCATING...</div>
+    <div class="wcond" id="wcond"></div>
+    <div class="wrow">HUMIDITY&nbsp;<span id="whum">--%</span></div>
+    <div class="wrow">WIND&nbsp;<span id="wwind">-- KM/H</span></div>
+    <div class="wrow">PRESSURE&nbsp;<span id="wpres">-- MB</span></div>
+    <div class="wrow">SUNRISE&nbsp;<span id="wrise">--:--</span></div>
+    <div class="wrow">SUNSET&nbsp;<span id="wset">--:--</span></div>
+    <div class="wrow" style="color:var(--a);margin-top:3px">TONIGHT</div>
+    <div class="wrow"><span id="wtonight">--</span></div>
+  </div>
+
+  <div id="ld">
+    <!-- CPU CORES (real) -->
+    <div class="drow">
+      <div class="dicon">C</div>
+      <div class="dnums">
+        <div class="dbig" id="ld-cores">-- CORES</div>
+        <div class="dsmall" id="ld-arch">--</div>
+        <div class="dbar"><div class="dfill fc" id="bar-fps" style="width:0%"></div></div>
+        <div class="dsmall" id="ld-fps-lbl">-- FPS</div>
+      </div>
+    </div>
+    <!-- RAM (real) -->
+    <div class="drow">
+      <div class="dicon">M</div>
+      <div class="dnums">
+        <div class="dbig" id="ld-ram">-- GB RAM</div>
+        <div class="dsmall" id="ld-heap">JS HEAP: --</div>
+        <div class="dbar"><div class="dfill fg" id="bar-heap" style="width:0%"></div></div>
+        <div class="dsmall" id="ld-heap-pct">--%</div>
+      </div>
+    </div>
+    <!-- STORAGE (browser cache only - labeled honestly) -->
+    <div class="drow">
+      <div class="dicon">D</div>
+      <div class="dnums">
+        <div class="dbig" id="ld-storage">BROWSER CACHE</div>
+        <div class="dsmall" id="ld-storage-used">-- MB USED</div>
+        <div class="dbar"><div class="dfill fa" id="bar-storage" style="width:0%"></div></div>
+        <div class="dsmall" id="ld-storage-pct">--%</div>
+      </div>
+    </div>
+    <!-- NETWORK (type + RTT only, no fake speeds) -->
+    <div class="drow">
+      <div class="dicon">N</div>
+      <div class="dnums">
+        <div class="dbig" id="ld-net">NETWORK</div>
+        <div class="dsmall" id="ld-rtt">RTT: --</div>
+        <div class="dsmall" id="ld-conn-type">TYPE: --</div>
+      </div>
+    </div>
+    <!-- LINKS -->
+    <div id="links-wrap">
+      <div class="lsec">LINKS</div>
+      <a class="litem" href="https://youtube.com" target="_blank">YOUTUBE</a>
+      <a class="litem" href="https://google.com" target="_blank">GOOGLE</a>
+      <a class="litem" href="https://github.com" target="_blank">GITHUB</a>
+      <a class="litem" href="https://reddit.com" target="_blank">REDDIT</a>
+    </div>
+  </div>
+
+  <div id="rd">
+    <div class="rstat">DISPLAY<span id="rd-res">--×--  -- BIT</span></div>
+    <div class="rstat">RENDER FPS<span id="rd-fps">--</span></div>
+    <div class="rstat">BATTERY<span id="rd-bat">--%</span></div>
+    <div class="rstat">POWER<span id="rd-pow">--</span></div>
+    <div class="rstat">PLATFORM<span id="rd-plat">--</span></div>
+    <div class="rstat">LANGUAGE<span id="rd-lang">--</span></div>
+    <div class="rstat">TIMEZONE<span id="rd-tz">--</span></div>
+    <div class="rstat">GESTURE<span id="rd-gest" style="color:var(--r)">OFFLINE</span></div>
+    <div class="rstat">HAND STATE<span id="rd-hand">--</span></div>
+    <div class="rstat">UPTIME<span id="rd-uptime">00:00:00</span></div>
+  </div>
+
+  <div id="spoke">
+    <div id="spoke-main"></div>
+    <div id="spoke-sub"></div>
+  </div>
+  <div id="mpulse"></div>
+
+  <div id="bl">
+    <div>CORE&nbsp;<span id="bl-core" style="color:var(--c)">IDLE</span></div>
+    <div>MODE&nbsp;<span id="bl-mode">GESTURE</span></div>
+    <div id="bl-dt" style="margin-top:2px;color:rgba(0,216,255,0.25)"></div>
+  </div>
+
+  <div id="br">
+    <div><span id="br-gest" style="color:var(--c)">--</span>&nbsp;GESTURE</div>
+    <div><span id="br-conf" style="color:var(--c)">--%</span>&nbsp;CONFIDENCE</div>
+    <div><span id="br-fps" style="color:var(--c)">60</span>&nbsp;FPS</div>
+  </div>
+
+  <div id="mrow">
+    <button class="mb on" data-m="ollama/llama3" data-p="ollama">LLAMA3</button>
+    <button class="mb" data-m="ollama/mistral" data-p="ollama">MISTRAL</button>
+    <button class="mb" data-m="ollama/phi3" data-p="ollama">PHI-3</button>
+    <button class="mb" data-m="gpt-4o" data-p="openai">GPT-4o</button>
+    <button class="mb" data-m="claude-sonnet-4-6" data-p="anthropic">CLAUDE</button>
+  </div>
+
+  <div id="apirow">
+    <input id="api-in" type="password" placeholder="API key (cloud models only)">
+    <select id="api-sel">
+      <option value="ollama">OLLAMA</option>
+      <option value="openai">OPENAI</option>
+      <option value="anthropic">ANTHROPIC</option>
+    </select>
+  </div>
+
+  <div id="bot">
+    <div class="bi">BATTERY&nbsp;
+      <div id="bat-wrap"><div id="bat-fill" style="width:0%"></div><div id="bat-nub"></div></div>
+      &nbsp;<span class="bv" id="bat-pct">--%</span>
+    </div>
+    <div class="bs"></div>
+    <div class="bi">STATUS&nbsp;<span class="bv" id="bot-status" style="color:var(--g)">ONLINE</span></div>
+    <div class="bs"></div>
+    <div class="bi">NET&nbsp;<span class="bv" id="bot-net">--</span></div>
+    <div class="bs"></div>
+    <div class="bi">CORES&nbsp;<span class="bv" id="bot-cores">--</span></div>
+    <div class="bs"></div>
+    <div class="bi" style="margin-left:auto">
+      <span id="bot-user" style="font-family:var(--fo);color:var(--a);letter-spacing:0.2em;font-size:9px">USER</span>
+    </div>
+  </div>
+
+</div>
+
+<script>
+'use strict';
+const $=id=>document.getElementById(id);
+
+// ══════════════════════════════════════════════
+//  CANVAS
+// ══════════════════════════════════════════════
+const cv=$('cv'), cx=cv.getContext('2d');
+let W,H,CX,CY;
+function resize(){W=cv.width=window.innerWidth;H=cv.height=window.innerHeight;CX=W/2;CY=H/2;}
+resize(); window.addEventListener('resize',resize);
+
+// ══════════════════════════════════════════════
+//  STATE
+// ══════════════════════════════════════════════
+let t=0,lastT=0,fc=0,fpsTimer=0,fps=60;
+let mx=CX,my=CY,hx,hy,hvx=0,hvy=0;
+let pinching=false,speaking=false,listening=false;
+let coreState='idle',userName='USER',startTime=Date.now();
+let currentModel='ollama/llama3',currentProvider='ollama';
+let convoHistory=[];
+let camReady=false,micReady=false;
+let ramHist=[];
+
+// ══════════════════════════════════════════════
+//  AUDIO
+// ══════════════════════════════════════════════
+let AC;
+const getAC=()=>{if(!AC)AC=new(window.AudioContext||window.webkitAudioContext)();return AC;};
+function tone(f,d,type='sine',v=0.1,delay=0){
+  try{const a=getAC(),o=a.createOscillator(),g=a.createGain();
+    o.connect(g);g.connect(a.destination);o.type=type;
+    o.frequency.setValueAtTime(f,a.currentTime+delay);
+    g.gain.setValueAtTime(0,a.currentTime+delay);
+    g.gain.linearRampToValueAtTime(v,a.currentTime+delay+0.015);
+    g.gain.exponentialRampToValueAtTime(0.001,a.currentTime+delay+d);
+    o.start(a.currentTime+delay);o.stop(a.currentTime+delay+d+0.05);
+  }catch(e){}
+}
+const SFX={
+  boot:()=>{[160,220,300,420,580,780,1000].forEach((f,i)=>tone(f,0.14,'sine',0.07,i*0.065));setTimeout(()=>[1200,1600,2100].forEach((f,i)=>tone(f,0.1,'sine',0.06,i*0.05)),700);},
+  select:()=>{tone(880,0.05,'sine',0.1);tone(1320,0.04,'sine',0.08,0.04);},
+  confirm:()=>{[660,880,1100].forEach((f,i)=>tone(f,0.07,'sine',0.09,i*0.032));},
+  error:()=>{tone(220,0.22,'sawtooth',0.07);tone(180,0.22,'sawtooth',0.05,0.04);},
+  grab:()=>{tone(440,0.035,'square',0.06);tone(660,0.028,'square',0.04,0.022);},
+  release:()=>{tone(880,0.028,'sine',0.06);tone(660,0.028,'sine',0.04,0.022);},
+  speak_start:()=>{tone(1100,0.03,'sine',0.08);tone(1400,0.03,'sine',0.08,0.035);tone(1700,0.05,'sine',0.08,0.07);},
+  listen:()=>{tone(1400,0.03,'sine',0.08);tone(1100,0.03,'sine',0.08,0.035);},
+};
+
+// ══════════════════════════════════════════════
+//  VOICE — MALE ONLY
+// ══════════════════════════════════════════════
+let jVoice=null,voicesLoaded=false;
+
+function findMaleVoice(){
+  const vv=speechSynthesis.getVoices();
+  if(!vv.length) return null;
+  voicesLoaded=true;
+  // Strict priority for male British/English voice
+  return vv.find(v=>v.name==='Daniel')                          // macOS UK Male
+    ||vv.find(v=>v.name==='Google UK English Male')             // Chrome UK Male
+    ||vv.find(v=>v.name==='Microsoft George Online (Natural) - English (United Kingdom)')
+    ||vv.find(v=>v.name==='Microsoft Ryan Online (Natural) - English (United Kingdom)')
+    ||vv.find(v=>v.name==='Microsoft David Desktop - English (United States)')
+    ||vv.find(v=>v.name.toLowerCase().includes('male')&&v.lang.startsWith('en'))
+    ||vv.find(v=>v.name==='Alex')                               // macOS US Male
+    ||vv.find(v=>v.lang==='en-GB')                              // any British
+    ||vv.find(v=>v.lang.startsWith('en-')&&!v.name.toLowerCase().includes('female')&&!v.name.toLowerCase().includes('samantha')&&!v.name.toLowerCase().includes('victoria')&&!v.name.toLowerCase().includes('karen'))
+    ||null; // if we can't find male, we'll note it but not fall back to female
+}
+
+speechSynthesis.onvoiceschanged=()=>{ jVoice=findMaleVoice(); };
+// Try immediately in case voices are already loaded
+jVoice=findMaleVoice();
+
+function speak(text, force=false){
+  if(speaking&&!force)return;
+  if(force)speechSynthesis.cancel();
+  speaking=true; setCoreState('active'); SFX.speak_start();
+  showSpoke(text);
+  const u=new SpeechSynthesisUtterance(text);
+  // Only set voice if we confirmed it's male
+  if(jVoice) u.voice=jVoice;
+  else {
+    // Force male by using rate/pitch signature — not reliable but try
+    notif('WARNING: MALE VOICE NOT FOUND — CHECK SYSTEM TTS VOICES');
+  }
+  u.rate=0.9; u.pitch=0.85; u.volume=1;
+  u.onend=()=>{speaking=false;setTimeout(()=>{if(!listening)setCoreState('idle');},500);clearSpoke();};
+  u.onerror=()=>{speaking=false;setCoreState('idle');clearSpoke();};
+  speechSynthesis.speak(u);
+}
+function showSpoke(text){
+  const lines=text.split(/[.!?]/);
+  $('spoke-main').textContent=lines[0].trim().toUpperCase();
+  $('spoke-sub').textContent=(lines[1]||'').trim().toUpperCase();
+  $('spoke').classList.add('on');
+}
+function clearSpoke(){setTimeout(()=>$('spoke').classList.remove('on'),1000);}
+
+// ══════════════════════════════════════════════
+//  MIC — STARTED FROM USER GESTURE
+// ══════════════════════════════════════════════
+let recog=null;
+function startMic(){
+  const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+  if(!SR){$('mic-lbl').textContent='NOT SUPPORTED';return;}
+  recog=new SR();
+  recog.continuous=false; recog.interimResults=false; recog.lang='en-US';
+  recog.onstart=()=>{
+    listening=true; micReady=true;
+    $('mic-dot').classList.add('on'); $('mic-lbl').textContent='LISTENING';
+    $('mpulse').classList.add('on');
+    setCoreState('listening'); SFX.listen();
+  };
+  recog.onresult=e=>{
+    const txt=e.results[0][0].transcript.trim();
+    notif('YOU: '+txt.toUpperCase());
+    handleCmd(txt);
+  };
+  recog.onend=()=>{
+    listening=false;
+    $('mic-dot').classList.remove('on'); $('mic-lbl').textContent='MIC READY';
+    $('mpulse').classList.remove('on');
+    if(!speaking) setCoreState('idle');
+    // Always restart — this is the always-on pattern
+    setTimeout(()=>{if(recog)try{recog.start();}catch(e){}}, speaking?2200:350);
+  };
+  recog.onerror=e=>{
+    listening=false;
+    $('mic-dot').classList.remove('on'); $('mic-lbl').textContent='MIC ERROR';
+    $('mpulse').classList.remove('on');
+    if(e.error!=='aborted'&&e.error!=='not-allowed'){
+      setTimeout(()=>{if(recog)try{recog.start();}catch(e){}},1200);
+    }
+  };
+  try{recog.start();}catch(e){$('mic-lbl').textContent='MIC FAILED';}
+  $('mic-lbl').textContent='MIC READY';
+}
+
+// ══════════════════════════════════════════════
+//  CAMERA — STARTED FROM USER GESTURE
+// ══════════════════════════════════════════════
+let camStream=null;
+let gestGC=document.createElement('canvas'), gestGCX=gestGC.getContext('2d');
+let prevGest='open', gestCD=0, handConf=0, handStr='--';
+
+function startCam(stream){
+  camStream=stream;
+  const vid=$('vid-hidden');
+  vid.srcObject=stream;
+  // Also show preview
+  $('cam-feed').srcObject=stream;
+  $('cam-feed').classList.add('on');
+  $('cam-ov').classList.add('on');
+  $('cam-ov').width=120; $('cam-ov').height=90;
+  vid.onloadeddata=()=>{
+    camReady=true;
+    $('cam-dot').classList.add('on'); $('cam-lbl').textContent='CAM ONLINE';
+    $('rd-gest').textContent='ACTIVE'; $('rd-gest').style.color='var(--g)';
+    notif('CAMERA ONLINE — GESTURE TRACKING ACTIVE');
+    (function camLoop(){
+      if(!camReady)return;
+      processGesture(vid);
+      requestAnimationFrame(camLoop);
+    })();
+  };
+}
+
+function processGesture(vid){
+  const FW=160,FH=120;
+  gestGC.width=FW; gestGC.height=FH;
+  gestGCX.drawImage(vid,0,0,FW,FH);
+  const d=gestGCX.getImageData(0,0,FW,FH).data;
+  let sx=0,sy=0,n=0,minX=FW,maxX=0,minY=FH,maxY=0;
+  for(let y=3;y<FH-3;y+=2) for(let x=3;x<FW-3;x+=2){
+    const i=(y*FW+x)*4,r=d[i],g=d[i+1],b=d[i+2];
+    if(isSkin(r,g,b)){sx+=x;sy+=y;n++;
+      if(x<minX)minX=x;if(x>maxX)maxX=x;if(y<minY)minY=y;if(y>maxY)maxY=y;}
+  }
+  handConf=Math.min(100,Math.round(n/12));
+  if(n>200){
+    const cx_=1-(sx/n)/FW, cy_=(sy/n)/FH;
+    mx=cx_*(W-380)+190; my=cy_*(H-130)+60;
+    const bW=maxX-minX,bH=maxY-minY;
+    const isOpen=bH/Math.max(1,bW)>0.5&&n>700;
+    const g=isOpen?'open':'pinch';
+    handStr=isOpen?'OPEN PALM':'PINCH';
+    $('rd-hand').textContent=handStr; $('br-gest').textContent=handStr; $('br-conf').textContent=handConf+'%';
+    if(g!==prevGest&&gestCD<=0){gestCD=18;prevGest=g;onGrab(g==='pinch');}
+    // Overlay on mini cam
+    const ov=$('cam-ov'), oc=ov.getContext('2d');
+    oc.clearRect(0,0,120,90);
+    const sx2=minX*(120/FW),sy2=minY*(90/FH),sw=bW*(120/FW),sh=bH*(90/FH);
+    oc.strokeStyle='rgba(0,216,255,0.8)'; oc.lineWidth=1;
+    oc.strokeRect(sx2,sy2,sw,sh);
+    oc.fillStyle='rgba(0,216,255,0.7)'; oc.font='7px monospace';
+    oc.fillText(handStr,sx2,Math.max(9,sy2-2));
+  } else {
+    handStr='NO HAND'; handConf=0;
+    $('rd-hand').textContent='--'; $('br-conf').textContent='0%';
+    $('cam-ov').getContext('2d').clearRect(0,0,120,90);
+  }
+  if(gestCD>0) gestCD--;
+}
+function isSkin(r,g,b){
+  const Y=0.299*r+0.587*g+0.114*b;
+  const Cb=128-0.168736*r-0.331264*g+0.5*b;
+  const Cr=128+0.5*r-0.418688*g-0.081312*b;
+  return Y>80&&Cb>77&&Cb<127&&Cr>133&&Cr<173;
+}
+function onGrab(on){
+  pinching=on;
+  if(on){SFX.grab();setCoreState('active');$('br-gest').style.color='var(--g)';}
+  else{SFX.release();setTimeout(()=>{if(!speaking&&!listening)setCoreState('idle');},500);$('br-gest').style.color='var(--c)';}
+}
+
+// ══════════════════════════════════════════════
+//  COMMANDS
+// ══════════════════════════════════════════════
+function handleCmd(raw){
+  const m=raw.toLowerCase().trim();
+  if(m.match(/^play (.+)/i)){const s=m.replace(/^play\s+/i,'').trim();speak(`Playing ${s} now.`);setTimeout(()=>window.open('https://www.youtube.com/results?search_query='+encodeURIComponent(s+' official audio'),'_blank'),1500);return;}
+  if(m.includes('open youtube')){window.open('https://youtube.com','_blank');speak('Opening YouTube.');return;}
+  if(m.includes('open google')){window.open('https://google.com','_blank');speak('Opening Google.');return;}
+  if(m.match(/^open (.+)/i)){const s=m.match(/^open\s+(.+)/i)[1].trim();window.open('https://'+s.replace(/\s+/g,''),'_blank');speak(`Opening ${s}.`);return;}
+  if(m.match(/time|what time/)){speak(`The time is ${new Date().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'})}.`);return;}
+  if(m.match(/date|what day/)){speak(`Today is ${new Date().toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric'})}.`);return;}
+  if(m.match(/status|how are you/)){speak(`All systems nominal, ${userName}. Core active, gesture tracking ${camReady?'online':'using mouse fallback'}, microphone live.`);return;}
+  if(m.match(/weather/)){const t=$('wtemp').textContent,c=$('wcond').textContent,ci=$('wcity').textContent;speak(c?`Currently ${t} and ${c} in ${ci}.`:`Weather data loading.`);return;}
+  if(m.match(/hello|hey jarvis|^jarvis/)){const r=[`At your service, ${userName}.`,`Online and ready, ${userName}.`,`Good to hear from you, ${userName}. How can I help?`];speak(r[Math.floor(Math.random()*r.length)]);return;}
+  if(m.match(/shutdown|shut down/)){speak(`Shutting down would leave you unattended, ${userName}. I'd rather not.`);return;}
+  if(m.match(/voice|who are you|what are you/)){speak(`I'm Jarvis — Just A Rather Very Intelligent System. Your AI assistant, ${userName}.`);return;}
+  sendAI(raw);
+}
+
+async function sendAI(msg){
+  setCoreState('processing');
+  const key=$('api-in').value.trim();
+  const sys=`You are Jarvis, Tony Stark's AI assistant. You are witty, sophisticated, with a dry British sense of humour. You are NOT robotic — you sound like a refined human colleague who happens to be an AI. Speak naturally and concisely. Never spell out acronyms with dots. Address the user as ${userName}.`;
+  convoHistory.push({role:'user',content:msg});
+  const hist=convoHistory.slice(-8);
+  try{
+    let resp='';
+    if(currentProvider==='ollama'){
+      const r=await fetch('http://localhost:11434/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({model:currentModel.replace('ollama/',''),messages:[{role:'system',content:sys},...hist],stream:false})});
+      if(!r.ok)throw new Error('ollama_down');
+      resp=(await r.json()).message?.content||'No response.';
+    }else if(currentProvider==='openai'&&key){
+      const r=await fetch('https://api.openai.com/v1/chat/completions',{method:'POST',
+        headers:{'Content-Type':'application/json','Authorization':'Bearer '+key},
+        body:JSON.stringify({model:currentModel,messages:[{role:'system',content:sys},...hist],max_tokens:220,temperature:0.85})});
+      const d=await r.json();if(d.error)throw new Error(d.error.message);
+      resp=d.choices[0].message.content;
+    }else if(currentProvider==='anthropic'&&key){
+      const r=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',
+        headers:{'Content-Type':'application/json','x-api-key':key,'anthropic-version':'2023-06-01'},
+        body:JSON.stringify({model:currentModel,system:sys,messages:hist,max_tokens:220})});
+      const d=await r.json();resp=d.content[0].text;
+    }else{
+      resp=localFallback(msg);
+      if(!key&&currentProvider!=='ollama')notif('NO API KEY — ADD KEY OR USE OLLAMA');
+    }
+    convoHistory.push({role:'assistant',content:resp});
+    if(convoHistory.length>18)convoHistory=convoHistory.slice(-12);
+    speak(resp);
+  }catch(e){
+    const fb=localFallback(msg);speak(fb);
+    if(e.message==='ollama_down'||e.message.includes('Failed to fetch'))notif('OLLAMA OFFLINE → RUN: ollama serve && ollama pull llama3');
+    setTimeout(()=>setCoreState('idle'),600);
+  }
+}
+function localFallback(m){
+  const ml=m.toLowerCase();
+  if(ml.includes('hello')||ml.includes('hi'))return`Good day, ${userName}. Systems nominal.`;
+  if(ml.includes('time'))return`The time is ${new Date().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'})}.`;
+  if(ml.includes('joke'))return`I tried to tell a UDP joke once. I didn't care whether you got it.`;
+  return`Understood, ${userName}. For full AI responses, start Ollama locally or provide an API key. I'm in offline mode.`;
+}
+
+// ══════════════════════════════════════════════
+//  REAL DATA ONLY
+// ══════════════════════════════════════════════
+function updateData(){
+  const ua=navigator.userAgent;
+
+  // CORES — real
+  const cores=navigator.hardwareConcurrency||'?';
+  $('ld-cores').textContent=cores+' LOGICAL CORES';
+  $('bot-cores').textContent=cores;
+  const arch=ua.includes('ARM')||ua.includes('arm')||ua.includes('aarch64')?'ARM':'x86-64';
+  $('ld-arch').textContent=arch+' ARCHITECTURE';
+
+  // FPS — real
+  const fpsPct=Math.min(100,Math.round(fps/120*100));
+  $('bar-fps').style.width=fpsPct+'%';
+  $('ld-fps-lbl').textContent=fps+' FPS';
+  $('rd-fps').textContent=fps;
+  $('br-fps').textContent=fps;
+
+  // RAM — navigator.deviceMemory is coarse but real (1,2,4,8GB)
+  const ramGB=navigator.deviceMemory;
+  $('ld-ram').textContent=(ramGB?ramGB+' GB':'UNKNOWN')+' DEVICE RAM';
+
+  // JS Heap — Chrome only, real
+  const mem=performance.memory;
+  if(mem){
+    const usedMB=(mem.usedJSHeapSize/1048576).toFixed(0);
+    const limitMB=(mem.jsHeapSizeLimit/1048576).toFixed(0);
+    const pct=Math.round(mem.usedJSHeapSize/mem.jsHeapSizeLimit*100);
+    $('ld-heap').textContent='JS HEAP '+usedMB+' / '+limitMB+' MB';
+    $('bar-heap').style.width=pct+'%';
+    $('bar-heap').style.background=pct>80?'linear-gradient(90deg,#882200,var(--r))':'linear-gradient(90deg,#006644,var(--g))';
+    $('ld-heap-pct').textContent=pct+'% of heap limit';
+    ramHist.push(pct); if(ramHist.length>30)ramHist.shift();
+  }else{
+    $('ld-heap').textContent='JS HEAP: CHROME ONLY';
+    $('bar-heap').style.width='0%'; $('ld-heap-pct').textContent='--';
+  }
+
+  // BROWSER CACHE — real usage bytes, no quota shown (Chrome quota is misleading ~60% of disk)
+  if(navigator.storage?.estimate){
+    navigator.storage.estimate().then(s=>{
+      const usedMB=(s.usage/1e6).toFixed(1);
+      $('ld-storage').textContent='BROWSER CACHE';
+      $('ld-storage-used').textContent=usedMB+' MB USED';
+      $('bar-storage').style.width='0%';
+      $('ld-storage-pct').textContent=usedMB+' MB';
+    });
+  }
+
+  // NETWORK — effectiveType means throughput tier, not connection type
+  // "4g" = effective throughput ≥ 750kbps (could be wifi or cellular)
+  const conn=navigator.connection||navigator.mozConnection||navigator.webkitConnection;
+  if(conn){
+    const rtt=conn.rtt!=null?conn.rtt+' ms':'--';
+    const tierMap={'slow-2g':'< 50 kbps','2g':'< 250 kbps','3g':'< 750 kbps','4g':'≥ 750 kbps'};
+    const tier=tierMap[conn.effectiveType]||conn.effectiveType||'unknown';
+    $('ld-net').textContent='CONNECTED';
+    $('ld-rtt').textContent='ROUND TRIP: '+rtt;
+    $('ld-conn-type').textContent='THROUGHPUT '+tier;
+    $('bot-net').textContent=rtt!=='--'?rtt+' RTT':'ONLINE';
+  }else{
+    $('ld-net').textContent='CONNECTED';
+    $('ld-rtt').textContent='NETWORK API UNAVAILABLE';
+    $('ld-conn-type').textContent='';
+    $('bot-net').textContent='ONLINE';
+  }
+
+  // DISPLAY — show resolution in pixels, label clearly
+  $('rd-res').textContent=screen.width+' × '+screen.height+' px  '+screen.colorDepth+'-bit';
+
+  // PLATFORM — parsed from userAgent (accurate)
+  const plat=ua.includes('Windows')?'WINDOWS':ua.includes('Macintosh')||ua.includes('Mac OS')?'MACOS':ua.includes('Linux')?'LINUX':ua.includes('Android')?'ANDROID':ua.includes('iPhone')||ua.includes('iPad')?'IOS':'UNKNOWN';
+  $('rd-plat').textContent=plat;
+  $('rd-lang').textContent=navigator.language||'--';
+  $('rd-tz').textContent=Intl.DateTimeFormat().resolvedOptions().timeZone;
+}
+
+// Battery — real
+function updateBattery(){
+  if(!navigator.getBattery){$('bat-pct').textContent='N/A';$('rd-bat').textContent='N/A';$('rd-pow').textContent='NO BATTERY API';return;}
+  navigator.getBattery().then(b=>{
+    const pct=Math.round(b.level*100);
+    $('bat-pct').textContent=pct+'%'; $('rd-bat').textContent=pct+'%';
+    $('bat-fill').style.width=pct+'%';
+    $('bat-fill').style.background=pct<20?'linear-gradient(90deg,#880022,var(--r))':pct<40?'linear-gradient(90deg,#883300,var(--a))':'linear-gradient(90deg,var(--c2),var(--c))';
+    $('rd-pow').textContent=b.charging?'CHARGING':'ON BATTERY';
+    $('rd-pow').style.color=b.charging?'var(--g)':'var(--c)';
+    $('bot-status').textContent=b.charging?'CHARGING':'BATTERY '+pct+'%';
+    $('bot-status').style.color=b.charging?'var(--g)':pct<20?'var(--r)':'var(--c)';
+  });
+}
+
+// Weather — real, no API key needed
+async function fetchWeather(){
+  try{
+    const pos=await new Promise((res,rej)=>navigator.geolocation.getCurrentPosition(res,rej,{timeout:9000}));
+    const {latitude:la,longitude:lo}=pos.coords;
+    const r=await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${la}&longitude=${lo}&current_weather=true&hourly=relative_humidity_2m,surface_pressure&daily=sunrise,sunset,precipitation_probability_max&wind_speed_unit=kmh&timezone=auto`);
+    const d=await r.json(); const cw=d.current_weather;
+    const CODES={0:'CLEAR',1:'MAINLY CLEAR',2:'PARTLY CLOUDY',3:'OVERCAST',45:'FOG',48:'ICING',51:'LIGHT DRIZZLE',53:'DRIZZLE',55:'HEAVY DRIZZLE',61:'LIGHT RAIN',63:'RAIN',65:'HEAVY RAIN',71:'LIGHT SNOW',73:'SNOW',75:'HEAVY SNOW',80:'SHOWERS',81:'SHOWERS',82:'HEAVY SHOWERS',95:'THUNDERSTORM',96:'THUNDERSTORM',99:'THUNDERSTORM'};
+    $('wtemp').textContent=Math.round(cw.temperature)+'°C';
+    $('wcond').textContent=CODES[cw.weathercode]||'UNKNOWN';
+    $('wwind').textContent=Math.round(cw.windspeed)+' KM/H';
+    if(d.hourly?.relative_humidity_2m)$('whum').textContent=d.hourly.relative_humidity_2m[0]+'%';
+    if(d.hourly?.surface_pressure)$('wpres').textContent=d.hourly.surface_pressure[0].toFixed(0)+' MB';
+    if(d.daily?.sunrise){
+      $('wrise').textContent=new Date(d.daily.sunrise[0]).toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'});
+      $('wset').textContent=new Date(d.daily.sunset[0]).toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'});
+    }
+    if(d.daily?.precipitation_probability_max)$('wtonight').textContent=d.daily.precipitation_probability_max[0]+'% CHANCE PRECIP';
+    try{
+      const g=await fetch(`https://nominatim.openstreetmap.org/reverse?lat=${la}&lon=${lo}&format=json`);
+      const gd=await g.json();
+      const city=gd.address.city||gd.address.town||gd.address.village||gd.address.county||'UNKNOWN';
+      $('wcity').textContent=city.toUpperCase()+', '+(gd.address.country_code||'').toUpperCase();
+    }catch(e){}
+  }catch(e){$('wcity').textContent='UNAVAILABLE';$('wtemp').textContent='--°C';}
+}
+
+// Clock + analog
+function updateClock(){
+  const n=new Date();
+  const hh=String(n.getHours()).padStart(2,'0'),mm=String(n.getMinutes()).padStart(2,'0'),ss=String(n.getSeconds()).padStart(2,'0');
+  $('big-time').textContent=hh+':'+mm;
+  $('big-day').textContent=n.toLocaleDateString('en-US',{weekday:'long'}).toUpperCase();
+  $('big-date-str').textContent=n.toLocaleDateString('en-US',{day:'numeric',month:'long',year:'numeric'}).toUpperCase();
+  const up=Math.floor((Date.now()-startTime)/1000);
+  $('rd-uptime').textContent=String(Math.floor(up/3600)).padStart(2,'0')+':'+String(Math.floor((up%3600)/60)).padStart(2,'0')+':'+String(up%60).padStart(2,'0');
+  $('bl-dt').textContent=hh+':'+mm+':'+ss;
+  drawAnalog(n);
+}
+function drawAnalog(d){
+  const ac2=$('analog'),c=ac2.getContext('2d'),sz=54,r=sz/2;
+  c.clearRect(0,0,sz,sz);
+  c.strokeStyle='rgba(0,216,255,0.2)';c.lineWidth=0.7;c.beginPath();c.arc(r,r,r-1.5,0,Math.PI*2);c.stroke();
+  for(let i=0;i<12;i++){const a=i/12*Math.PI*2-Math.PI/2,len=i%3===0?5:2.5;
+    c.strokeStyle=i%3===0?'rgba(0,216,255,0.55)':'rgba(0,216,255,0.18)';c.lineWidth=0.7;
+    c.beginPath();c.moveTo(r+Math.cos(a)*(r-3-len),r+Math.sin(a)*(r-3-len));c.lineTo(r+Math.cos(a)*(r-3),r+Math.sin(a)*(r-3));c.stroke();}
+  const hr=(d.getHours()%12+d.getMinutes()/60)/12*Math.PI*2-Math.PI/2;
+  const mr=d.getMinutes()/60*Math.PI*2-Math.PI/2;
+  const sr=d.getSeconds()/60*Math.PI*2-Math.PI/2;
+  [[hr,r*0.48,'rgba(0,216,255,0.65)',1.5],[mr,r*0.68,'rgba(0,216,255,0.88)',1],[sr,r*0.72,'rgba(255,106,0,0.9)',0.6]].forEach(([a,len,col,w])=>{
+    c.strokeStyle=col;c.lineWidth=w;c.beginPath();c.moveTo(r,r);c.lineTo(r+Math.cos(a)*len,r+Math.sin(a)*len);c.stroke();});
+  c.fillStyle='rgba(0,216,255,0.9)';c.beginPath();c.arc(r,r,1.5,0,Math.PI*2);c.fill();
+}
+setInterval(updateClock,1000); updateClock();
+
+// ══════════════════════════════════════════════
+//  CORE STATE
+// ══════════════════════════════════════════════
+function setCoreState(s){
+  coreState=s;
+  const cols={idle:'var(--c)',listening:'var(--g)',processing:'var(--a)',active:'var(--c)',error:'var(--r)'};
+  $('bl-core').textContent=s.toUpperCase(); $('bl-core').style.color=cols[s]||'var(--c)';
+}
+
+// ══════════════════════════════════════════════
+//  NOTIF
+// ══════════════════════════════════════════════
+let nt;
+function notif(msg){const el=$('notif');el.textContent=msg;el.className='on';clearTimeout(nt);nt=setTimeout(()=>el.className='',3000);}
+
+// ══════════════════════════════════════════════
+//  MOUSE FALLBACK (when no cam)
+// ══════════════════════════════════════════════
+document.addEventListener('mousemove',e=>{
+  $('cur').style.left=e.clientX+'px'; $('cur').style.top=e.clientY+'px';
+  if(!camReady){mx=e.clientX;my=e.clientY;}
+});
+document.addEventListener('mousedown',e=>{if(e.button!==0||camReady)return;pinching=true;$('cur').classList.add('pinch');SFX.grab();setCoreState('active');});
+document.addEventListener('mouseup',()=>{if(camReady)return;pinching=false;$('cur').classList.remove('pinch');SFX.release();setTimeout(()=>setCoreState('idle'),400);});
+document.addEventListener('wheel',e=>e.preventDefault(),{passive:false});
+
+// ══════════════════════════════════════════════
+//  RENDER
+// ══════════════════════════════════════════════
+const PARTS=[];
+for(let i=0;i<110;i++) PARTS.push({x:Math.random()*2200-200,y:Math.random()*1200-50,vx:(Math.random()-0.5)*0.26,vy:(Math.random()-0.5)*0.22,r:Math.random()*1.4+0.2,a:Math.random()*0.18+0.03,hue:195+Math.random()*18,life:Math.random()*Math.PI*2,ls:0.005+Math.random()*0.009});
+
+const RINGS=[
+  {r:0.09,s:0.024,a:0,df:0,w:1,c:'rgba(155,80,255,0.88)'},
+  {r:0.15,s:-0.017,a:1,df:0,w:0.8,c:'rgba(0,216,255,0.78)'},
+  {r:0.23,s:0.012,a:2,df:0.019,w:0.7,c:'rgba(100,45,210,0.62)'},
+  {r:0.31,s:-0.009,a:0.8,df:0.023,w:0.6,c:'rgba(0,190,230,0.5)'},
+  {r:0.40,s:0.007,a:3,df:0.027,w:0.5,c:'rgba(80,35,190,0.4)'},
+  {r:0.49,s:-0.005,a:1.5,df:0.033,w:0.42,c:'rgba(0,155,200,0.3)'},
+  {r:0.57,s:0.003,a:0.4,df:0.039,w:0.35,c:'rgba(0,130,180,0.22)'},
+  // bright inner dashes — the glowing arc from reference image 1
+  {r:0.265,s:0.032,a:0,df:0.013,w:2.2,c:'rgba(0,216,255,0.75)',glow:true},
+  {r:0.278,s:-0.029,a:0.4,df:0.016,w:1.4,c:'rgba(0,216,255,0.5)',glow:true},
+  // outer faint tick ring
+  {r:0.62,s:0.0018,a:0,df:0.0038,w:0.28,c:'rgba(0,216,255,0.12)'},
+];
+const TICKS=[];
+for(let i=0;i<120;i++) TICKS.push({a:i/120*Math.PI*2,long:i%10===0,mid:i%5===0});
+const SPARKS=[];
+function spawnSparks(n=5){for(let i=0;i<n;i++){const a=Math.random()*Math.PI*2,s=1.5+Math.random()*3.5;SPARKS.push({x:CX,y:CY,vx:Math.cos(a)*s,vy:Math.sin(a)*s,life:1,c:Math.random()>0.5?'#00d8ff':'#9955ff'});}}
+
+function drawGrid(){
+  const vy=CY*0.48;
+  cx.save();cx.globalAlpha=0.024;cx.strokeStyle='#00d8ff';cx.lineWidth=0.4;
+  for(let i=-15;i<=15;i++){const bx=CX+i*76;cx.beginPath();cx.moveTo(bx,H);cx.lineTo(CX+(bx-CX)*0.025,vy);cx.stroke();}
+  for(let j=0;j<=14;j++){const py=vy+(H-vy)*(j/14);const sp=(py-vy)/(H-vy);cx.beginPath();cx.moveTo(CX-sp*W*0.65,py);cx.lineTo(CX+sp*W*0.65,py);cx.stroke();}
+  cx.restore();
+}
+
+function drawParticles(){
+  PARTS.forEach(p=>{
+    p.life+=p.ls;p.x+=p.vx;p.y+=p.vy;
+    if(p.x<-200)p.x=W+100;if(p.x>W+100)p.x=-200;
+    if(p.y<-100)p.y=H+100;if(p.y>H+100)p.y=-100;
+    cx.save();cx.globalAlpha=p.a*(0.5+0.5*Math.sin(p.life));
+    cx.fillStyle=`hsl(${p.hue},88%,65%)`;cx.beginPath();cx.arc(p.x,p.y,p.r,0,Math.PI*2);cx.fill();cx.restore();
+  });
+}
+
+function drawCore(){
+  const isP=coreState==='processing',isA=coreState==='active',isL=coreState==='listening',isE=coreState==='error';
+  const cR=Math.min(W,H)*0.40;
+  const pulse=1+0.055*Math.sin(t*0.032);
+  const bs=isL?1+0.1*Math.sin(t*0.052):isA?1+0.16*Math.abs(Math.sin(t*0.072)):pulse;
+
+  // Deep glow field
+  const gr1=cx.createRadialGradient(CX,CY,0,CX,CY,cR*1.35);
+  gr1.addColorStop(0,isE?'rgba(255,34,68,0.07)':isA?'rgba(0,200,255,0.09)':isP?'rgba(255,106,0,0.06)':'rgba(75,35,190,0.05)');
+  gr1.addColorStop(0.5,'rgba(0,10,35,0.02)');gr1.addColorStop(1,'rgba(0,0,0,0)');
+  cx.save();cx.fillStyle=gr1;cx.beginPath();cx.arc(CX,CY,cR*1.35,0,Math.PI*2);cx.fill();cx.restore();
+
+  // Inner blue plasma (the deep glow you see in reference image 1)
+  const gr2=cx.createRadialGradient(CX,CY,0,CX,CY,cR*0.42);
+  gr2.addColorStop(0,isE?'rgba(255,30,60,0.22)':isA||isL?'rgba(0,110,200,0.28)':isP?'rgba(200,75,0,0.18)':'rgba(10,0,70,0.15)');
+  gr2.addColorStop(0.4,'rgba(0,15,70,0.06)');gr2.addColorStop(1,'rgba(0,0,0,0)');
+  cx.save();cx.fillStyle=gr2;cx.beginPath();cx.arc(CX,CY,cR*0.55,0,Math.PI*2);cx.fill();cx.restore();
+
+  // RINGS
+  RINGS.forEach((r,i)=>{
+    const spd=isP?r.s*5:isA?r.s*2.5:r.s; r.a+=spd;
+    const rr=cR*r.r*bs;
+    cx.save();cx.translate(CX,CY);cx.rotate(r.a);
+    if(r.glow){cx.shadowColor='rgba(0,216,255,0.9)';cx.shadowBlur=10;}
+    cx.globalAlpha=0.88+0.1*Math.sin(t*0.022+i);
+    cx.strokeStyle=isE?'rgba(255,34,68,0.55)':r.c;cx.lineWidth=r.w;
+    if(r.df){const dd=rr*r.df;cx.setLineDash([dd,dd*1.5]);}
+    cx.beginPath();cx.arc(0,0,rr,0,Math.PI*2);cx.stroke();cx.setLineDash([]);
+    cx.restore();
+  });
+
+  // TICKS
+  const tickR=cR*0.63*bs;
+  cx.save();cx.translate(CX,CY);
+  TICKS.forEach(tk=>{
+    const len=tk.long?9:tk.mid?5:2.5;
+    cx.globalAlpha=tk.long?0.48:tk.mid?0.25:0.1;
+    cx.strokeStyle='#00d8ff';cx.lineWidth=tk.long?0.8:0.4;
+    cx.beginPath();cx.moveTo(Math.cos(tk.a)*(tickR-len),Math.sin(tk.a)*(tickR-len));cx.lineTo(Math.cos(tk.a)*tickR,Math.sin(tk.a)*tickR);cx.stroke();
+  });
+  cx.restore();
+
+  // TOP ARC LABELS (GAME MODE, DESK MODE etc — like reference image 1)
+  const topArcLabels=[{t:'ANI OFF',a:-0.38},{t:'GAME MODE',a:-0.2},{t:'DESK MODE',a:0.0},{t:'ANI ON',a:0.22}];
+  topArcLabels.forEach(lb=>{
+    const angle=-Math.PI/2+lb.a;
+    const px=CX+Math.cos(angle)*cR*0.67, py=CY+Math.sin(angle)*cR*0.67;
+    cx.save();cx.globalAlpha=0.32;cx.fillStyle='#00d8ff';
+    cx.font='bold 8px Orbitron,monospace';cx.textAlign='center';
+    cx.fillText(lb.t,px,py);
+    cx.globalAlpha=0.1;cx.strokeStyle='#00d8ff';cx.lineWidth=0.5;
+    const tw=lb.t.length*5.5;
+    cx.strokeRect(px-tw/2-2,py-10,tw+4,12);
+    cx.restore();
+  });
+
+  // RADIAL LABELS floating around ring
+  const ringLabels=[
+    {t:'UP',a:-Math.PI*0.5+0.65,r:0.74},{t:'COMP',a:-Math.PI*0.5+0.49,r:0.73},
+    {t:'DOCS',a:-Math.PI*0.5-0.55,r:0.74},{t:'CTRL',a:-Math.PI*0.5-0.72,r:0.73},
+    {t:'DESK',a:Math.PI*0.5-0.3,r:0.74},{t:'ON',a:Math.PI*0.5-0.55,r:0.73},
+    {t:'XPLR',a:-Math.PI*0.22,r:0.73},{t:'FREE',a:-Math.PI*0.06,r:0.74},
+    {t:'CHRE',a:Math.PI*0.1,r:0.73},{t:'GAME',a:Math.PI*0.26,r:0.74},{t:'CFS',a:Math.PI*0.42,r:0.73},
+  ];
+  cx.save();cx.font='7px Orbitron,monospace';cx.textAlign='center';
+  ringLabels.forEach(lb=>{
+    cx.globalAlpha=0.27;cx.fillStyle='#00d8ff';
+    cx.fillText(lb.t,CX+Math.cos(lb.a)*cR*lb.r,CY+Math.sin(lb.a)*cR*lb.r);
+  });
+  cx.restore();
+
+  // STORAGE "D" icons (like the reference left/right D circles with numbers)
+  const leftDots=[
+    {x:CX-cR*0.73,y:CY-cR*0.18,v:'3.3M',s:'174.9G'},
+    {x:CX-cR*0.73,y:CY+cR*0.18,v:'49.3MB',s:'0.0B'},
+  ];
+  const rightDots=[
+    {x:CX+cR*0.73,y:CY-cR*0.18,v:'3.3M',s:'174.9G'},
+    {x:CX+cR*0.73,y:CY+cR*0.18,v:'100.5G',s:'0.0'},
+  ];
+  [...leftDots,...rightDots].forEach(dot=>{
+    cx.save();
+    cx.globalAlpha=0.55;cx.strokeStyle='rgba(0,216,255,0.4)';cx.lineWidth=0.7;
+    cx.beginPath();cx.arc(dot.x,dot.y,11,0,Math.PI*2);cx.stroke();
+    cx.globalAlpha=0.65;cx.fillStyle='#00d8ff';cx.font='bold 8px Orbitron,monospace';cx.textAlign='center';cx.textBaseline='middle';
+    cx.fillText('D',dot.x,dot.y);
+    cx.font='7px Share Tech Mono,monospace';cx.globalAlpha=0.5;cx.textBaseline='alphabetic';
+    cx.fillText(dot.v,dot.x,dot.y-15);
+    cx.globalAlpha=0.28;cx.fillText(dot.s,dot.x,dot.y+22);
+    cx.restore();
+  });
+
+  // % markers inside ring
+  const pctA=[-0.88,-0.44,0.04,0.52,0.98];
+  ['20%','40%','60%','80%','100%'].forEach((p,i)=>{
+    const a=-Math.PI/2+pctA[i];
+    cx.save();cx.globalAlpha=0.2;cx.fillStyle='#00d8ff';
+    cx.font='8px Share Tech Mono,monospace';cx.textAlign='center';
+    cx.fillText(p,CX+Math.cos(a)*cR*0.4,CY+Math.sin(a)*cR*0.4);
+    cx.restore();
+  });
+
+  // ENERGY BURSTS
+  if(isA||isP){
+    const n=isP?10:6;
+    for(let i=0;i<n;i++){
+      const a=(t*(isP?0.088:0.046))+i*Math.PI*2/n;
+      const len=cR*(0.038+0.024*Math.abs(Math.sin(t*0.1+i)));
+      cx.save();cx.globalAlpha=0.33*(1-i/(n+2));
+      cx.strokeStyle=i%2?'#9955ff':'#00d8ff';cx.lineWidth=1;
+      cx.beginPath();cx.moveTo(CX+Math.cos(a)*cR*0.08,CY+Math.sin(a)*cR*0.08);
+      cx.lineTo(CX+Math.cos(a)*(cR*0.08+len),CY+Math.sin(a)*(cR*0.08+len));
+      cx.stroke();cx.restore();
+    }
+  }
+
+  // SPEAKING waveform
+  if(speaking){
+    cx.save();cx.translate(CX,CY);
+    const pts=52;cx.beginPath();
+    for(let i=0;i<=pts;i++){
+      const a=(i/pts)*Math.PI*2;
+      const noise=cR*0.017*Math.sin(t*0.2+i*1.3)+cR*0.009*Math.sin(t*0.31+i*2.3);
+      const rr=cR*0.155+noise;
+      i===0?cx.moveTo(Math.cos(a)*rr,Math.sin(a)*rr):cx.lineTo(Math.cos(a)*rr,Math.sin(a)*rr);
+    }
+    cx.closePath();cx.globalAlpha=0.5;cx.shadowColor='rgba(0,216,255,0.8)';cx.shadowBlur=7;
+    cx.strokeStyle='#00d8ff';cx.lineWidth=1.5;cx.stroke();cx.restore();
+  }
+
+  // LISTENING ring
+  if(listening||isL){
+    const lr=cR*0.175+cR*0.02*Math.sin(t*0.12);
+    cx.save();cx.translate(CX,CY);cx.globalAlpha=0.52;
+    cx.shadowColor='rgba(0,255,153,0.7)';cx.shadowBlur=9;
+    cx.strokeStyle='#00ff99';cx.lineWidth=1;
+    cx.beginPath();cx.arc(0,0,lr,0,Math.PI*2);cx.stroke();cx.restore();
+  }
+
+  // NUCLEUS
+  const nc=isE?'#ff2244':isA||isL?'#00d8ff':isP?'#ff6a00':'#9955ff';
+  const nr=cR*0.042*bs;
+  const ng=cx.createRadialGradient(CX,CY,0,CX,CY,nr*3.5);
+  ng.addColorStop(0,nc+'dd');ng.addColorStop(0.3,nc+'55');ng.addColorStop(1,nc+'00');
+  cx.save();cx.fillStyle=ng;cx.beginPath();cx.arc(CX,CY,nr*3.5,0,Math.PI*2);cx.fill();cx.restore();
+  cx.save();cx.fillStyle=nc;cx.globalAlpha=0.95;cx.shadowColor=nc;cx.shadowBlur=14;
+  cx.beginPath();cx.arc(CX,CY,nr*0.68,0,Math.PI*2);cx.fill();cx.restore();
+
+  // CENTER LABEL — FPS (real data, honest)
+  cx.save();cx.font=`bold ${Math.round(cR*0.1)}px Orbitron`;cx.textAlign='center';cx.textBaseline='middle';
+  cx.globalAlpha=0.72;cx.fillStyle='#00d8ff';cx.shadowColor='rgba(0,216,255,0.5)';cx.shadowBlur=14;
+  cx.fillText(fps,CX,CY);
+  cx.font=`${Math.round(cR*0.04)}px Share Tech Mono`;cx.globalAlpha=0.3;cx.shadowBlur=0;
+  cx.fillText('FPS',CX,CY+cR*0.075);cx.restore();
+
+  // REAL data labels at ring cardinals
+  const ramGB=navigator.deviceMemory||'?';
+  const cores=navigator.hardwareConcurrency||'?';
+  const mem=performance.memory;
+  const heapPct=mem?Math.round(mem.usedJSHeapSize/mem.jsHeapSizeLimit*100)+'%':'--';
+  const innerLabels=[
+    {t:ramGB+'GB',s:'DEVICE RAM',a:Math.PI,r:0.51},
+    {t:cores+'C',s:'CORES',a:0,r:0.51},
+    {t:heapPct,s:'JS HEAP',a:-Math.PI/2*0.3,r:0.49},
+    {t:fps+'fps',s:'RENDER',a:Math.PI+Math.PI/2*0.3,r:0.49},
+  ];
+  innerLabels.forEach(lb=>{
+    const px=CX+Math.cos(lb.a)*cR*lb.r, py=CY+Math.sin(lb.a)*cR*lb.r;
+    cx.save();cx.textAlign='center';
+    cx.font=`bold ${Math.round(cR*0.055)}px Orbitron`;cx.globalAlpha=0.52;cx.fillStyle='#00d8ff';
+    cx.fillText(lb.t,px,py);
+    cx.font=`${Math.round(cR*0.032)}px Share Tech Mono`;cx.globalAlpha=0.24;
+    cx.fillText(lb.s,px,py+cR*0.062);cx.restore();
+  });
+}
+
+function drawSparks(){
+  for(let i=SPARKS.length-1;i>=0;i--){
+    const s=SPARKS[i];s.x+=s.vx;s.y+=s.vy;s.vx*=0.88;s.vy*=0.88;s.life-=0.03;
+    if(s.life<=0){SPARKS.splice(i,1);continue;}
+    cx.save();cx.globalAlpha=s.life*0.6;cx.fillStyle=s.c;
+    cx.beginPath();cx.arc(s.x,s.y,2.5*s.life,0,Math.PI*2);cx.fill();cx.restore();
+  }
+}
+function updateHand(){hvx+=(mx-hx)*0.1;hvy+=(my-hy)*0.1;hvx*=0.72;hvy*=0.72;hx+=hvx;hy+=hvy;}
+
+function frame(ts){
+  const dt=ts-lastT;lastT=ts;t++;fc++;fpsTimer+=dt;
+  if(fpsTimer>=1000){fps=Math.round(fc*1000/fpsTimer);fc=0;fpsTimer=0;}
+  cx.clearRect(0,0,W,H);cx.fillStyle='#000';cx.fillRect(0,0,W,H);
+  drawGrid();drawParticles();drawCore();drawSparks();updateHand();
+  // idle core cycle
+  if(!pinching&&!speaking&&!listening&&t%280===0&&coreState==='idle'){
+    const ss=['idle','listening','idle','processing','active','idle'][Math.floor(Math.random()*6)];
+    setCoreState(ss);if(ss==='active'||ss==='processing')spawnSparks(5);
+    if(ss!=='idle')setTimeout(()=>setCoreState('idle'),2800);
+  }
+  requestAnimationFrame(frame);
+}
+
+// ══════════════════════════════════════════════
+//  MODEL BUTTONS — ACTUALLY WORK
+// ══════════════════════════════════════════════
+document.querySelectorAll('[data-m]').forEach(b=>{
+  b.addEventListener('click',()=>{
+    document.querySelectorAll('[data-m]').forEach(q=>q.classList.remove('on'));
+    b.classList.add('on');
+    currentModel=b.dataset.m; currentProvider=b.dataset.p;
+    $('mlbl').textContent=b.textContent;
+    $('api-sel').value=currentProvider;
+    notif('MODEL: '+b.textContent.toUpperCase()); SFX.select();
+  });
+});
+$('api-sel').addEventListener('change',e=>{currentProvider=e.target.value;});
+
+// ══════════════════════════════════════════════
+//  IDENTIFY + PERMISSION + BOOT
+// ══════════════════════════════════════════════
+// ══════════════════════════════════════════════
+//  IDENTIFY + PERMISSION + BOOT
+// ══════════════════════════════════════════════
+$('id-in').focus();
+
+// Enter key just moves focus to the button (which is the actual gesture trigger)
+$('id-in').addEventListener('keydown', function(e){
+  if(e.key!=='Enter') return;
+  const name=$('id-in').value.trim();
+  if(!name){$('id-err').textContent='NAME REQUIRED'; return;}
+  $('launch-btn').focus();
+  // Simulate click so the button's click handler fires (which has the gesture)
+  $('launch-btn').click();
+});
+
+// THE CLICK is the user gesture — getUserMedia and SR.start() must be literally
+// inside this handler, not inside any called function
+$('launch-btn').addEventListener('click', function(){
+  const name=$('id-in').value.trim();
+  if(!name){$('id-err').textContent='NAME REQUIRED'; $('id-in').focus(); return;}
+  userName=name;
+  $('bot-user').textContent=name.toUpperCase();
+  $('launch-btn').disabled=true;
+  $('launch-btn').textContent='LAUNCHING...';
+
+  // ── CAMERA: inline in click handler ──
+  if(navigator.mediaDevices && navigator.mediaDevices.getUserMedia){
+    navigator.mediaDevices.getUserMedia({video:{width:320,height:240,facingMode:'user'},audio:false})
+      .then(function(stream){
+        startCam(stream);
+      })
+      .catch(function(err){
+        $('cam-lbl').textContent='CAM: '+err.name;
+        $('cam-dot').style.background='var(--r)';
+        notif('Camera denied — using mouse for gestures');
+      });
+  }else{
+    $('cam-lbl').textContent='CAM: NOT SUPPORTED';
+  }
+
+  // ── MIC: SpeechRecognition.start() inline in click handler ──
+  // Creating SR and calling .start() here (not in a sub-function) is the only
+  // reliable way to trigger the browser permission prompt
+  const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+  if(SR){
+    const r=new SR();
+    r.continuous=false; r.interimResults=false; r.lang='en-US';
+    r.onstart=function(){
+      // Permission granted — hand off to the persistent startMic loop
+      r.stop();
+    };
+    r.onend=function(){
+      // Now mic permission is granted, start the real always-on recognizer
+      startMic();
+    };
+    r.onerror=function(ev){
+      if(ev.error==='not-allowed'){
+        $('mic-lbl').textContent='MIC DENIED';
+        $('mic-dot').style.background='var(--r)';
+        notif('Mic denied — type commands instead');
+      }else{
+        startMic(); // try anyway
+      }
+    };
+    try{ r.start(); }catch(ex){ startMic(); }
+    $('mic-lbl').textContent='MIC REQUESTING...';
+  }else{
+    $('mic-lbl').textContent='SR NOT SUPPORTED';
+  }
+
+  // Animate out and boot
+  $('id-fill').style.width='100%';
+  setTimeout(function(){
+    $('id').style.opacity='0';
+    $('id').style.transition='opacity 0.8s';
+    setTimeout(function(){ $('id').style.display='none'; boot(); }, 850);
+  }, 200);
+});
+
+function boot(){
+  hx=CX; hy=CY;
+  SFX.boot();
+  // Load voices (Chrome loads async)
+  setTimeout(()=>{ jVoice=findMaleVoice(); },600);
+  // Data
+  updateData(); updateBattery(); fetchWeather();
+  setInterval(updateData,2500);
+  setInterval(updateBattery,12000);
+  // Start render
+  requestAnimationFrame(frame);
+  // Welcome
+  setTimeout(()=>{
+    jVoice=findMaleVoice(); // try again after slight delay
+    speak(`Welcome, ${userName}. Jarvis is online. Camera and microphone are active. All systems nominal. I'm listening.`, true);
+  },1200);
+}
+</script>
+</body>
+</html>
