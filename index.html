@@ -358,7 +358,8 @@ html,body{width:100%;height:100%;overflow:hidden;background:#000;cursor:none;
   <div id="bl">
     <div>CORE&nbsp;<span id="bl-core" style="color:var(--c)">IDLE</span></div>
     <div>MODE&nbsp;<span id="bl-mode">GESTURE</span></div>
-    <div id="bl-dt" style="margin-top:2px;color:rgba(0,216,255,0.25)"></div>
+    <div>WAKE <span id="bl-wake" style="color:rgba(0,216,255,0.55)">WAITING</span></div>
+  <div id="bl-dt" style="margin-top:2px;color:rgba(0,216,255,0.25)"></div>
   </div>
 
   <div id="br">
@@ -402,6 +403,30 @@ html,body{width:100%;height:100%;overflow:hidden;background:#000;cursor:none;
   </div>
 
 </div>
+
+
+
+<!-- 3D VIEWER -->
+<div id="viewer-wrap" style="position:fixed;inset:0;z-index:40;display:none;background:rgba(0,3,12,0.97)">
+  <canvas id="viewer-cv" style="position:absolute;inset:0;width:100%;height:100%"></canvas>
+  <button id="viewer-close" style="position:absolute;top:14px;right:18px;font-family:'Orbitron',monospace;font-size:9px;letter-spacing:0.25em;color:#00d8ff;border:1px solid rgba(0,216,255,0.3);background:transparent;cursor:pointer;padding:5px 12px;border-radius:2px;z-index:41">✕ CLOSE 3D</button>
+  <div id="viewer-info" style="position:absolute;top:14px;left:18px;font-size:9px;letter-spacing:0.11em;color:rgba(0,216,255,0.48);line-height:2.2;z-index:41">
+    FILE <span id="vf-name" style="color:#00d8ff">--</span><br>
+    VERTS <span id="vf-verts" style="color:#00d8ff">--</span><br>
+    FACES <span id="vf-faces" style="color:#00d8ff">--</span><br>
+    <span style="color:rgba(0,216,255,0.22);display:block;margin-top:6px">PINCH + DRAG = ROTATE</span>
+    <span style="color:rgba(0,216,255,0.22)">SCROLL = ZOOM</span>
+  </div>
+</div>
+<div id="file-drop" style="position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);display:none;z-index:42;pointer-events:none">
+  <div id="file-drop-inner" style="font-family:'Orbitron',monospace;font-size:13px;letter-spacing:0.3em;color:#00d8ff;text-shadow:0 0 28px #00d8ff;padding:38px 55px;border:1px solid rgba(0,216,255,0.38);background:rgba(0,8,22,0.94);text-align:center">
+    <div style="font-size:24px;margin-bottom:10px">◈</div>
+    LOADING 3D FILE<br>
+    <span style="font-size:8px;letter-spacing:0.2em;color:rgba(0,216,255,0.38)">STL · OBJ · PLY</span>
+  </div>
+</div>
+<input id="file-input" type="file" accept=".stl,.obj,.ply,.fbx,.3ds" style="display:none">
+<div id="wake-ind" style="position:fixed;bottom:88px;left:50%;transform:translateX(-50%);font-size:8px;letter-spacing:0.22em;color:rgba(0,216,255,0.22);pointer-events:none;transition:all 0.3s">SAY "JARVIS" TO ACTIVATE</div>
 
 <script>
 'use strict';
@@ -491,47 +516,170 @@ function clearSpoke(){setTimeout(()=>$('spoke').classList.remove('on'),1400);}
 
 // WAKE WORD SYSTEM
 let recog=null;
-function startMic(){
-  const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
-  if(!SR){$('mic-lbl').textContent='NOT SUPPORTED';return;}
-  recog=new SR();recog.continuous=false;recog.interimResults=false;recog.lang='en-US';
-  recog.onstart=()=>{
-    listening=true;micReady=true;
-    $('mic-dot').classList.add('on');
-    $('mic-lbl').textContent=wakeActive?'LISTENING':'WAKE WORD';
-    $('mpulse').classList.add('on');
-    if(wakeActive)setCoreState('listening');
-  };
+// ══════════════════════════════════════════
+//  WHISPER.CPP STT
+//  Expects whisper.cpp server running at localhost:8080
+//  Start with: ./server -m models/ggml-base.en.bin -l en
+//  Fallback to Web Speech API if not available
+// ══════════════════════════════════════════
+const WHISPER_URL = 'http://localhost:8080/inference';
+let mediaRecorder = null;
+let audioChunks = [];
+let isRecording = false;
+let recordingLoop = null;
+let whisperAvailable = false;
+let webSpeechFallback = false;
+// recog declared in state section above
+
+// Check if whisper server is up
+async function checkWhisper(){
+  try{
+    const r = await fetch('http://localhost:8080/', {method:'GET', signal:AbortSignal.timeout(1500)});
+    whisperAvailable = true;
+    $('mic-lbl').textContent = 'WHISPER READY';
+    notif('WHISPER.CPP CONNECTED');
+    return true;
+  }catch(e){
+    whisperAvailable = false;
+    return false;
+  }
+}
+
+async function startMic(){
+  micReady = true;
+  const hasWhisper = await checkWhisper();
+  if(hasWhisper){
+    startWhisperLoop();
+  } else {
+    // Fallback to Web Speech API
+    webSpeechFallback = true;
+    $('mic-lbl').textContent = 'WEB SPEECH';
+    notif('WHISPER OFFLINE — USING BROWSER STT. Run: ./server -m ggml-base.en.bin');
+    startWebSpeech();
+  }
+}
+
+// ── WHISPER LOOP ──
+// Records 3-second chunks, sends to whisper.cpp, processes result
+async function startWhisperLoop(){
+  let stream;
+  try{
+    stream = await navigator.mediaDevices.getUserMedia({audio:{sampleRate:16000,channelCount:1,echoCancellation:true,noiseSuppression:true},video:false});
+  }catch(e){
+    notif('MIC ACCESS FAILED: '+e.name, 'warn');
+    $('mic-lbl').textContent = 'MIC DENIED';
+    return;
+  }
+
+  $('mic-dot').classList.add('on');
+  $('mic-lbl').textContent = wakeActive ? 'LISTENING' : 'WAKE WORD';
+
+  async function recordChunk(){
+    if(!micReady) return;
+    return new Promise(resolve => {
+      const chunks = [];
+      // Use audio/webm if supported, else ogg
+      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+        ? 'audio/webm;codecs=opus'
+        : MediaRecorder.isTypeSupported('audio/ogg') ? 'audio/ogg' : 'audio/webm';
+      const mr = new MediaRecorder(stream, {mimeType});
+      mr.ondataavailable = e => { if(e.data.size>0) chunks.push(e.data); };
+      mr.onstop = () => resolve(new Blob(chunks, {type: mimeType}));
+      mr.start();
+      // Record for 3s when wake active, else 2s for wake word detection
+      setTimeout(() => mr.stop(), wakeActive ? 3000 : 2000);
+    });
+  }
+
+  async function sendToWhisper(blob){
+    const fd = new FormData();
+    fd.append('file', blob, 'audio.webm');
+    fd.append('temperature', '0.0');
+    fd.append('temperature_inc', '0.2');
+    fd.append('response_format', 'json');
+    try{
+      const r = await fetch(WHISPER_URL, {method:'POST', body:fd, signal:AbortSignal.timeout(8000)});
+      const d = await r.json();
+      return (d.text||'').trim();
+    }catch(e){ return ''; }
+  }
+
+  // Continuous loop
+  async function loop(){
+    if(!micReady) return;
+
+    // Show listening state
+    if(wakeActive){
+      listening = true;
+      $('mic-dot').classList.add('on');
+      $('mpulse').classList.add('on');
+      $('mic-lbl').textContent = 'RECORDING...';
+      setCoreState('listening');
+    } else {
+      $('mic-lbl').textContent = 'SCANNING...';
+    }
+
+    const blob = await recordChunk();
+
+    if(wakeActive){
+      $('mpulse').classList.remove('on');
+      $('mic-lbl').textContent = 'PROCESSING...';
+    }
+
+    const text = await sendToWhisper(blob);
+    listening = false;
+
+    if(text && text.length > 1){
+      const raw = text.toLowerCase().trim();
+      // Filter out whisper hallucinations
+      const hallucinations = /^(thank you|thanks|you|the|\.|\[.*\]|♪|music)$/i;
+      if(hallucinations.test(raw.replace(/[.,!?]/g,'').trim())) {
+        // ignore
+      } else {
+        notif(text.toUpperCase());
+        if(!wakeActive){
+          if(raw.includes('jarvis')){
+            activateWake();
+            const after = raw.replace(/.*?jarvis\.?\s*/,'').trim();
+            if(after.length > 2) handleCmd(after);
+          }
+        } else {
+          handleCmd(text);
+          resetWakeTimer();
+        }
+      }
+    }
+
+    if(!speaking){
+      $('mic-lbl').textContent = wakeActive ? 'LISTENING' : 'WAKE WORD';
+    }
+
+    // Small gap then loop again
+    setTimeout(loop, speaking ? 2500 : 100);
+  }
+
+  loop();
+}
+
+// ── WEB SPEECH FALLBACK ──
+function startWebSpeech(){
+  const SR = window.SpeechRecognition||window.webkitSpeechRecognition;
+  if(!SR){ $('mic-lbl').textContent='NOT SUPPORTED'; return; }
+  recog = new SR(); recog.continuous=false; recog.interimResults=false; recog.lang='en-US';
+  recog.onstart=()=>{ listening=true; $('mic-dot').classList.add('on'); $('mpulse').classList.add('on'); if(wakeActive)setCoreState('listening'); $('mic-lbl').textContent=wakeActive?'LISTENING':'WAKE WORD'; };
   recog.onresult=e=>{
     const raw=e.results[0][0].transcript.trim().toLowerCase();
     const full=e.results[0][0].transcript.trim();
     notif(full.toUpperCase());
-    if(!wakeActive){
-      if(raw.includes('jarvis')){
-        activateWake();
-        const after=raw.replace(/.*?jarvis\s*/,'').trim();
-        if(after.length>2)handleCmd(after);
-      }
-    }else{
-      handleCmd(full);
-      resetWakeTimer();
-    }
+    if(!wakeActive){ if(raw.includes('jarvis')){ activateWake(); const after=raw.replace(/.*?jarvis\s*/,'').trim(); if(after.length>2)handleCmd(after); } }
+    else{ handleCmd(full); resetWakeTimer(); }
   };
-  recog.onend=()=>{
-    listening=false;
-    $('mic-dot').classList.remove('on');$('mpulse').classList.remove('on');
-    $('mic-lbl').textContent=micReady?(wakeActive?'ACTIVE':'WAKE WORD'):'MIC';
-    if(!speaking&&!wakeActive)setCoreState('idle');
-    setTimeout(()=>{if(recog)try{recog.start();}catch(e){}},speaking?2000:300);
-  };
-  recog.onerror=e=>{
-    listening=false;$('mic-dot').classList.remove('on');$('mpulse').classList.remove('on');
-    if(e.error==='not-allowed'){$('mic-lbl').textContent='MIC DENIED';micReady=false;return;}
-    if(e.error!=='aborted')setTimeout(()=>{if(recog)try{recog.start();}catch(ex){}},900);
-  };
+  recog.onend=()=>{ listening=false; $('mic-dot').classList.remove('on'); $('mpulse').classList.remove('on'); $('mic-lbl').textContent=micReady?(wakeActive?'ACTIVE':'WAKE WORD'):'MIC'; if(!speaking&&!wakeActive)setCoreState('idle'); setTimeout(()=>{ if(recog&&micReady)try{recog.start();}catch(e){} }, speaking?2000:300); };
+  recog.onerror=e=>{ listening=false; $('mic-dot').classList.remove('on'); $('mpulse').classList.remove('on'); if(e.error==='not-allowed'){ $('mic-lbl').textContent='MIC DENIED'; micReady=false; return; } if(e.error!=='aborted') setTimeout(()=>{ if(recog)try{recog.start();}catch(ex){} },800); };
   try{recog.start();}catch(e){}
   $('mic-lbl').textContent='WAKE WORD';
 }
+
 
 function activateWake(){
   wakeActive=true;
@@ -611,7 +759,7 @@ let prevGest='open',gestCD=0,handConf=0,handStr='--';
 function startCam(stream){
   const vidH=$('vid-hidden');
   vidH.srcObject=stream;
-  $('cam-vid').srcObject=stream;$('cam-vid').classList.add('on');
+  $('cam-feed').srcObject=stream;$('cam-feed').classList.add('on');
   $('cam-ov').style.display='block';$('cam-ov').width=130;$('cam-ov').height=98;
   vidH.onloadeddata=()=>{
     camReady=true;
@@ -659,23 +807,23 @@ function onGrab(on){
 }
 
 // 3D VIEWER
-function openFilePrompt(){SFX.fileOpen();speak(`Opening 3D file browser.`);$('file-in').click();}
-$('v-close').addEventListener('click',()=>{viewerOpen=false;$('viewer-wrap').classList.remove('on');if(viewerAnim)cancelAnimationFrame(viewerAnim);speak('3D viewer closed.');});
+function openFilePrompt(){SFX.fileOpen();speak(`Opening 3D file browser.`);$('file-input').click();}
+$('viewer-close').addEventListener('click',()=>{viewerOpen=false;$('viewer-wrap').classList.remove('on');if(viewerAnim)cancelAnimationFrame(viewerAnim);speak('3D viewer closed.');});
 
-$('file-in').addEventListener('change',function(e){
+$('file-input').addEventListener('change',function(e){
   const file=e.target.files[0];if(!file)return;
-  $('v-drop').classList.add('on');
+  $('file-drop').classList.add('on');
   const ext=file.name.split('.').pop().toLowerCase();
   const reader=new FileReader();
   reader.onload=function(ev){
-    $('v-drop').classList.remove('on');
+    $('file-drop').classList.remove('on');
     try{
       if(ext==='stl')parseSTL(ev.target.result,file.name);
       else if(ext==='obj')parseOBJ(ev.target.result,file.name);
       else if(ext==='ply')parsePLY(ev.target.result,file.name);
       else{speak('Format preview not fully supported. Showing placeholder.');parseSphere(file.name);}
       openViewer(file.name);
-    }catch(err){$('v-drop').classList.remove('on');speak('File parsing failed.');console.error(err);}
+    }catch(err){$('file-drop').classList.remove('on');speak('File parsing failed.');console.error(err);}
   };
   if(ext==='stl')reader.readAsArrayBuffer(file);else reader.readAsText(file);
   e.target.value='';
@@ -787,8 +935,8 @@ function renderViewer(){
   // Grid floor
   vctx.save();vctx.globalAlpha=0.05;vctx.strokeStyle='#00d8ff';vctx.lineWidth=0.5;
   for(let i=-5;i<=5;i++){
-    [[i*0.4,-1,-2],[i*0.4,-1,2]].map(([x,y,z])=>{let x1=x*cosY+z*sinY,z1=-x*sinY+z*cosY,y2=y*cosX-z1*sinX,z2=y*sinX+z1*cosX,d=3+z2;return{sx:cx+x1/d*sc,sy:cy-y2/d*sc};}).forEach((p,j)=>{j===0?vctx.beginPath(),vctx.moveTo(p.sx,p.sy):vctx.lineTo(p.sx,p.sy)});vctx.stroke();
-    [[-2,-1,i*0.4],[2,-1,i*0.4]].map(([x,y,z])=>{let x1=x*cosY+z*sinY,z1=-x*sinY+z*cosY,y2=y*cosX-z1*sinX,z2=y*sinX+z1*cosX,d=3+z2;return{sx:cx+x1/d*sc,sy:cy-y2/d*sc};}).forEach((p,j)=>{j===0?vctx.beginPath(),vctx.moveTo(p.sx,p.sy):vctx.lineTo(p.sx,p.sy)});vctx.stroke();
+    (function(){const pts=[[i*0.4,-1,-2],[i*0.4,-1,2]].map(([x,y,z])=>{let x1=x*cosY+z*sinY,z1=-x*sinY+z*cosY,y2=y*cosX-z1*sinX,z2=y*sinX+z1*cosX,d=3+z2;return{sx:cx+x1/d*sc,sy:cy-y2/d*sc};});vctx.beginPath();vctx.moveTo(pts[0].sx,pts[0].sy);vctx.lineTo(pts[1].sx,pts[1].sy);vctx.stroke();})();
+    (function(){const pts=[[-2,-1,i*0.4],[2,-1,i*0.4]].map(([x,y,z])=>{let x1=x*cosY+z*sinY,z1=-x*sinY+z*cosY,y2=y*cosX-z1*sinX,z2=y*sinX+z1*cosX,d=3+z2;return{sx:cx+x1/d*sc,sy:cy-y2/d*sc};});vctx.beginPath();vctx.moveTo(pts[0].sx,pts[0].sy);vctx.lineTo(pts[1].sx,pts[1].sy);vctx.stroke();})();
   }
   vctx.restore();
 }
@@ -812,8 +960,8 @@ function updateData(){
   else{$('ld-heap').textContent='JS HEAP: CHROME ONLY';$('bar-heap').style.width='0%';$('ld-heap-pct').textContent='--';}
   const conn=navigator.connection||navigator.mozConnection;
   if(conn){const rtt=conn.rtt!=null?conn.rtt+' ms':'--',tierMap={'slow-2g':'< 50kbps','2g':'< 250kbps','3g':'< 750kbps','4g':'≥ 750kbps'};
-    $('ld-net').textContent='CONNECTED';$('ld-rtt').textContent='RTT: '+rtt;$('ld-tier').textContent=tierMap[conn.effectiveType]||'CONNECTED';$('bot-net').textContent=rtt!=='--'?rtt:'ONLINE';}
-  else{$('ld-net').textContent='CONNECTED';$('ld-rtt').textContent='RTT: --';$('ld-tier').textContent='';$('bot-net').textContent='ONLINE';}
+    $('ld-net').textContent='CONNECTED';$('ld-rtt').textContent='RTT: '+rtt;$('ld-conn-type').textContent=tierMap[conn.effectiveType]||'CONNECTED';$('bot-net').textContent=rtt!=='--'?rtt:'ONLINE';}
+  else{$('ld-net').textContent='CONNECTED';$('ld-rtt').textContent='RTT: --';$('ld-conn-type').textContent='';$('bot-net').textContent='ONLINE';}
   $('rd-res').textContent=screen.width+' × '+screen.height+' px';
   const plat=ua.includes('Windows')?'WINDOWS':ua.includes('Macintosh')?'MACOS':ua.includes('Linux')?'LINUX':'UNKNOWN';
   $('rd-plat').textContent=plat;$('rd-tz').textContent=Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -844,13 +992,13 @@ async function fetchWeather(){
 function updateClock(){
   const n=new Date(),hh=String(n.getHours()).padStart(2,'0'),mm=String(n.getMinutes()).padStart(2,'0');
   $('big-time').textContent=hh+':'+mm;$('big-day').textContent=n.toLocaleDateString('en-US',{weekday:'long'}).toUpperCase();
-  $('big-date').textContent=n.toLocaleDateString('en-US',{day:'numeric',month:'long',year:'numeric'}).toUpperCase();
+  $('big-date-str').textContent=n.toLocaleDateString('en-US',{day:'numeric',month:'long',year:'numeric'}).toUpperCase();
   const up=Math.floor((Date.now()-startT)/1000);
   $('rd-uptime').textContent=String(Math.floor(up/3600)).padStart(2,'0')+':'+String(Math.floor((up%3600)/60)).padStart(2,'0')+':'+String(up%60).padStart(2,'0');
   $('bl-dt').textContent=hh+':'+mm+':'+String(n.getSeconds()).padStart(2,'0');
   drawAnalog(n);
 }
-function drawAnalog(d){const c=$('analog-cv').getContext('2d'),sz=54,r=sz/2;c.clearRect(0,0,sz,sz);c.strokeStyle='rgba(0,216,255,0.17)';c.lineWidth=0.7;c.beginPath();c.arc(r,r,r-2,0,Math.PI*2);c.stroke();for(let i=0;i<12;i++){const a=i/12*Math.PI*2-Math.PI/2,len=i%3===0?5:2.5;c.strokeStyle=i%3===0?'rgba(0,216,255,0.5)':'rgba(0,216,255,0.14)';c.lineWidth=0.7;c.beginPath();c.moveTo(r+Math.cos(a)*(r-3-len),r+Math.sin(a)*(r-3-len));c.lineTo(r+Math.cos(a)*(r-2.5),r+Math.sin(a)*(r-2.5));c.stroke();}const hr=(d.getHours()%12+d.getMinutes()/60)/12*Math.PI*2-Math.PI/2,mr=d.getMinutes()/60*Math.PI*2-Math.PI/2,sr=d.getSeconds()/60*Math.PI*2-Math.PI/2;[[hr,r*0.47,'rgba(0,216,255,0.62)',1.5],[mr,r*0.67,'rgba(0,216,255,0.88)',0.9],[sr,r*0.72,'rgba(255,102,0,0.9)',0.55]].forEach(([a,len,col,w])=>{c.strokeStyle=col;c.lineWidth=w;c.beginPath();c.moveTo(r,r);c.lineTo(r+Math.cos(a)*len,r+Math.sin(a)*len);c.stroke();});c.fillStyle='rgba(0,216,255,0.9)';c.beginPath();c.arc(r,r,1.5,0,Math.PI*2);c.fill();}
+function drawAnalog(d){const c=$('analog').getContext('2d'),sz=54,r=sz/2;c.clearRect(0,0,sz,sz);c.strokeStyle='rgba(0,216,255,0.17)';c.lineWidth=0.7;c.beginPath();c.arc(r,r,r-2,0,Math.PI*2);c.stroke();for(let i=0;i<12;i++){const a=i/12*Math.PI*2-Math.PI/2,len=i%3===0?5:2.5;c.strokeStyle=i%3===0?'rgba(0,216,255,0.5)':'rgba(0,216,255,0.14)';c.lineWidth=0.7;c.beginPath();c.moveTo(r+Math.cos(a)*(r-3-len),r+Math.sin(a)*(r-3-len));c.lineTo(r+Math.cos(a)*(r-2.5),r+Math.sin(a)*(r-2.5));c.stroke();}const hr=(d.getHours()%12+d.getMinutes()/60)/12*Math.PI*2-Math.PI/2,mr=d.getMinutes()/60*Math.PI*2-Math.PI/2,sr=d.getSeconds()/60*Math.PI*2-Math.PI/2;[[hr,r*0.47,'rgba(0,216,255,0.62)',1.5],[mr,r*0.67,'rgba(0,216,255,0.88)',0.9],[sr,r*0.72,'rgba(255,102,0,0.9)',0.55]].forEach(([a,len,col,w])=>{c.strokeStyle=col;c.lineWidth=w;c.beginPath();c.moveTo(r,r);c.lineTo(r+Math.cos(a)*len,r+Math.sin(a)*len);c.stroke();});c.fillStyle='rgba(0,216,255,0.9)';c.beginPath();c.arc(r,r,1.5,0,Math.PI*2);c.fill();}
 setInterval(updateClock,1000);updateClock();
 
 function setCoreState(s){coreState=s;const cols={idle:'var(--c)',listening:'var(--g)',processing:'var(--a)',active:'var(--c)',error:'var(--r)'};if($('bl-core')){$('bl-core').textContent=s.toUpperCase();$('bl-core').style.color=cols[s]||'var(--c)';}}
@@ -930,12 +1078,12 @@ document.querySelectorAll('[data-m]').forEach(b=>{b.addEventListener('click',()=
 if($('api-sel'))$('api-sel').addEventListener('change',e=>{currentProvider=e.target.value;});
 
 // IDENTIFY + BOOT
-$('id-name').focus();
-$('id-name').addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();$('id-launch').focus();$('id-launch').click();}});
+$('id-in').focus();
+$('id-in').addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();$('launch-btn').focus();$('launch-btn').click();}});
 
-$('id-launch').addEventListener('click',function(){
-  const name=$('id-name').value.trim();
-  if(!name){$('id-err').textContent='NAME REQUIRED';$('id-name').focus();return;}
+$('launch-btn').addEventListener('click',function(){
+  const name=$('id-in').value.trim();
+  if(!name){$('id-err').textContent='NAME REQUIRED';$('id-in').focus();return;}
   userName=name;if($('bot-user'))$('bot-user').textContent=name.toUpperCase();
   this.textContent='LAUNCHING...';this.disabled=true;
 
@@ -944,20 +1092,21 @@ $('id-launch').addEventListener('click',function(){
     .then(stream=>startCam(stream))
     .catch(err=>{notif('Camera: '+err.name+' — mouse control active','warn');if($('cam-lbl'))$('cam-lbl').textContent='CAM: '+err.name;});
 
-  // MIC — SR.start() inline in click = browser prompts
-  const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
-  if(SR){
-    const pr=new SR();pr.lang='en-US';let handed=false;
-    function ho(){if(handed)return;handed=true;startMic();}
-    pr.onstart=function(){pr.stop();};pr.onend=ho;
-    pr.onerror=function(ev){if(ev.error==='not-allowed'){if($('mic-lbl'))$('mic-lbl').textContent='MIC DENIED';notif('Microphone denied','warn');}else ho();};
-    try{pr.start();}catch(ex){ho();}
-  }else{if($('mic-lbl'))$('mic-lbl').textContent='NOT SUPPORTED';}
+  // MIC — just request permission then hand off to startMic()
+  // startMic() handles whisper.cpp or fallback automatically
+  navigator.mediaDevices.getUserMedia({audio:true, video:false})
+    .then(stream=>{ stream.getTracks().forEach(t=>t.stop()); startMic(); })
+    .catch(err=>{
+      if(err.name==='NotAllowedError'){
+        notif('Microphone denied','warn');
+        if($('mic-lbl'))$('mic-lbl').textContent='MIC DENIED';
+      } else { startMic(); }
+    });
 
-  $('id-scanfill').style.width='100%';
+  $('id-fill').style.width='100%';
   setTimeout(function(){
-    $('id-screen').style.transition='opacity 0.9s';$('id-screen').style.opacity='0';
-    setTimeout(function(){$('id-screen').style.display='none';boot();},950);
+    $('id').style.transition='opacity 0.9s';$('id').style.opacity='0';
+    setTimeout(function(){$('id').style.display='none';boot();},950);
   },300);
 });
 
