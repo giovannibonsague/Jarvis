@@ -159,16 +159,11 @@ html,body{width:100%;height:100%;overflow:hidden;background:#000;cursor:none;
 .mb.on{border-color:rgba(0,216,255,0.5);color:var(--c);background:rgba(0,40,80,0.4)}
 
 /* API row */
-#apirow{position:absolute;bottom:16px;right:16px;display:flex;gap:4px;
-  pointer-events:auto;opacity:0.28;transition:opacity 0.2s}
-#apirow:hover{opacity:1}
-#api-in{background:rgba(0,3,12,0.9);border:1px solid rgba(0,216,255,0.12);
-  color:rgba(0,216,255,0.7);font-family:var(--f);font-size:7px;
-  padding:3px 6px;border-radius:1px;width:138px;outline:none;letter-spacing:0.05em}
-#api-in::placeholder{color:rgba(0,216,255,0.18);font-size:6px}
-#api-sel{background:rgba(0,3,12,0.9);border:1px solid rgba(0,216,255,0.12);
-  color:rgba(0,150,190,0.6);font-family:var(--f);font-size:7px;
-  padding:3px 4px;border-radius:1px;outline:none;cursor:pointer}
+
+
+
+
+
 
 /* BOTTOM BAR */
 #bot{position:fixed;bottom:0;left:0;right:0;height:48px;
@@ -375,17 +370,7 @@ html,body{width:100%;height:100%;overflow:hidden;background:#000;cursor:none;
     <button class="mb" data-m="llama3.2" data-p="ollama">LLAMA3.2</button>
     <button class="mb" data-m="gemma3" data-p="ollama">GEMMA3</button>
   </div>
-
-  <div id="apirow">
-    <input id="api-in" type="password" placeholder="API key (cloud models only)">
-    <select id="api-sel">
-      <option value="ollama">OLLAMA</option>
-      <option value="openai">OPENAI</option>
-      <option value="anthropic">ANTHROPIC</option>
-    </select>
-  </div>
-
-  <div id="bot">
+<div id="bot">
     <div class="bi">BATTERY&nbsp;
       <div id="bat-wrap"><div id="bat-fill" style="width:0%"></div><div id="bat-nub"></div></div>
       &nbsp;<span class="bv" id="bat-pct">--%</span>
@@ -1079,11 +1064,19 @@ function notif(msg,type=''){const el=$('notif');if(!el)return;el.textContent=msg
 // ── MOUSE FALLBACK (only when no hand detected) ──
 document.addEventListener('mousemove',e=>{
   $('cur').style.left=e.clientX+'px';$('cur').style.top=e.clientY+'px';
-  // Only use mouse for cursor position if camera isn't tracking a hand
-  if(!handDetected){mx=e.clientX;my=e.clientY;}
+  // ONLY use mouse position when camera has no hand detected
+  if(!camReady || !handDetected){mx=e.clientX;my=e.clientY;}
 });
-document.addEventListener('mousedown',e=>{if(e.button!==0||camReady)return;pinching=true;SFX.grab();if(!viewerOpen)setCoreState('active');});
-document.addEventListener('mouseup',()=>{if(camReady&&handDetected)return;pinching=false;SFX.release();if(!viewerOpen)setTimeout(()=>setCoreState(wakeActive?'listening':'idle'),400);});
+document.addEventListener('mousedown',e=>{
+  if(e.button!==0) return;
+  // If camera is on AND a hand is detected, mouse clicks are ignored (hand controls gestures)
+  if(camReady && handDetected) return;
+  pinching=true;SFX.grab();if(!viewerOpen)setCoreState('active');
+});
+document.addEventListener('mouseup',()=>{
+  if(camReady && handDetected) return;
+  pinching=false;SFX.release();if(!viewerOpen)setTimeout(()=>setCoreState(wakeActive?'listening':'idle'),400);
+});
 
 // ── RENDER CORE ──
 const PARTS=[];for(let i=0;i<110;i++)PARTS.push({x:Math.random()*2200-200,y:Math.random()*1200-50,vx:(Math.random()-0.5)*0.25,vy:(Math.random()-0.5)*0.2,r:Math.random()*1.4+0.2,a:Math.random()*0.16+0.03,hue:195+Math.random()*16,life:Math.random()*Math.PI*2,ls:0.005+Math.random()*0.009});
@@ -1223,22 +1216,39 @@ function runBootSequence(onDone){
     },line.d);
   });
 
-  // Check Ollama while booting
+  // Check Ollama and pre-load model into memory during boot
   setTimeout(async()=>{
+    function addBootLine(text, color){
+      const el=document.createElement('div');
+      el.style.cssText=`color:${color};font-size:9px;letter-spacing:0.18em;`;
+      el.textContent=text; lines.appendChild(el);
+      while(lines.children.length>7)lines.removeChild(lines.firstChild);
+    }
     try{
+      // Check available models
       const r=await fetch('http://localhost:11434/api/tags',{signal:AbortSignal.timeout(2000)});
       const d=await r.json();
       const models=(d.models||[]).map(m=>m.name.split(':')[0]);
-      const el=document.createElement('div');
-      el.style.cssText='color:rgba(0,255,136,0.8);font-size:9px;letter-spacing:0.18em;';
-      el.textContent='> OLLAMA ONLINE: '+models.slice(0,3).join(', ');
-      lines.appendChild(el);
+      addBootLine('> OLLAMA ONLINE: '+(models.slice(0,3).join(', ')||'no models found'),'rgba(0,255,136,0.8)');
       SFX.modelLoaded();
+      // Pre-warm: send a tiny message to load model into GPU/RAM during boot
+      // This means first real request is instant instead of slow
+      addBootLine('> PRE-LOADING MODEL: '+currentModel+'...','rgba(0,216,255,0.6)');
+      status.textContent='LOADING MODEL INTO MEMORY...';
+      try{
+        await fetch('http://localhost:11434/api/generate',{
+          method:'POST', headers:{'Content-Type':'application/json'},
+          signal:AbortSignal.timeout(30000),
+          body:JSON.stringify({model:currentModel, prompt:'hi', stream:false, options:{num_predict:1}})
+        });
+        addBootLine('> MODEL LOADED AND READY','rgba(0,255,136,0.8)');
+        SFX.confirm();
+      }catch(e){
+        addBootLine('> MODEL PRE-LOAD SKIPPED (will load on first use)','rgba(255,160,0,0.6)');
+      }
     }catch(e){
-      const el=document.createElement('div');
-      el.style.cssText='color:rgba(255,102,0,0.8);font-size:9px;letter-spacing:0.18em;';
-      el.textContent='> OLLAMA OFFLINE — run: ollama serve';
-      lines.appendChild(el);
+      addBootLine('> OLLAMA OFFLINE — run: ollama serve && ollama pull llama3','rgba(255,102,0,0.8)');
+      SFX.error();
     }
   },1100);
 
