@@ -200,6 +200,37 @@ html,body{width:100%;height:100%;overflow:hidden;background:#000;cursor:none;
   font-size:8px;letter-spacing:0.22em;color:rgba(0,216,255,0.22);
   transition:all 0.3s;pointer-events:none}
 #wake-ind.active{color:var(--g);text-shadow:0 0 10px rgba(0,255,136,0.4)}
+
+/* ── MUSIC PLAYER ── */
+#music-player{position:fixed;bottom:52px;left:50%;transform:translateX(-50%);
+  z-index:25;background:rgba(0,6,18,0.92);border:1px solid rgba(0,216,255,0.18);
+  border-radius:4px;padding:8px 16px;display:none;align-items:center;gap:14px;
+  min-width:380px;backdrop-filter:blur(10px);pointer-events:auto}
+#music-player.on{display:flex}
+#music-title{font-size:9px;letter-spacing:0.12em;color:rgba(0,216,255,0.7);
+  flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#music-time{font-size:8px;color:rgba(0,216,255,0.4);letter-spacing:0.1em;min-width:70px;text-align:right}
+#music-progress-wrap{width:100%;height:2px;background:rgba(0,216,255,0.1);
+  border-radius:1px;cursor:pointer;margin:0 -2px}
+#music-progress-fill{height:100%;background:var(--c);border-radius:1px;width:0%;transition:width 0.5s linear;
+  box-shadow:0 0 6px var(--c)}
+.mctl{font-size:14px;background:transparent;border:none;cursor:pointer;
+  color:var(--c);opacity:0.6;transition:opacity 0.15s;padding:0 3px;font-family:monospace}
+.mctl:hover{opacity:1}
+#vol-sl{-webkit-appearance:none;width:60px;height:2px;background:rgba(0,216,255,0.15);
+  border-radius:1px;cursor:pointer;outline:none}
+#vol-sl::-webkit-slider-thumb{-webkit-appearance:none;width:9px;height:9px;
+  border-radius:50%;background:var(--c);cursor:pointer}
+
+/* ── DRAG DROP OVERLAY ── */
+#drag-overlay{position:fixed;inset:0;z-index:60;background:rgba(0,8,22,0.88);
+  display:none;align-items:center;justify-content:center;flex-direction:column;gap:16px;
+  border:3px solid rgba(0,216,255,0.4);pointer-events:none}
+#drag-overlay.show{display:flex}
+#drag-overlay-text{font-family:var(--fo);font-size:20px;letter-spacing:0.35em;
+  color:var(--c);text-shadow:0 0 30px var(--c)}
+#drag-overlay-sub{font-size:9px;letter-spacing:0.25em;color:rgba(0,216,255,0.45)}
+
 </style>
 </head>
 <body>
@@ -413,6 +444,29 @@ html,body{width:100%;height:100%;overflow:hidden;background:#000;cursor:none;
 <input id="file-input" type="file" accept=".stl,.obj,.ply,.fbx,.3ds" style="display:none">
 <div id="wake-ind" style="position:fixed;bottom:88px;left:50%;transform:translateX(-50%);font-size:8px;letter-spacing:0.22em;color:rgba(0,216,255,0.22);pointer-events:none;transition:all 0.3s">SAY "JARVIS" TO ACTIVATE</div>
 
+
+<!-- MUSIC PLAYER -->
+<div id="music-player">
+  <div style="display:flex;flex-direction:column;gap:4px;flex:1;overflow:hidden">
+    <div id="music-title">— NO TRACK —</div>
+    <div id="music-progress-wrap"><div id="music-progress-fill"></div></div>
+  </div>
+  <div id="music-time">0:00 / 0:00</div>
+  <button class="mctl" id="m-back">«10</button>
+  <button class="mctl" id="m-play">▶</button>
+  <button class="mctl" id="m-fwd">10»</button>
+  <button class="mctl" id="m-stop" style="color:var(--r)">■</button>
+  <input type="range" id="vol-sl" min="0" max="1" step="0.02" value="0.8">
+</div>
+<!-- HIDDEN AUDIO -->
+<audio id="jarvis-audio" style="display:none"></audio>
+
+<!-- DRAG DROP OVERLAY -->
+<div id="drag-overlay">
+  <div id="drag-overlay-text">◈ DROP 3D FILE</div>
+  <div id="drag-overlay-sub">STL · OBJ · PLY · FBX</div>
+</div>
+
 <script>
 'use strict';
 const $=id=>document.getElementById(id);
@@ -477,7 +531,6 @@ const SFX={
     },1600);
   },
   // BOOT LINE BEEP: small blip for each boot line
-  bootLine(){tone(800+Math.random()*400,0.04,'sine',0.05);},
   // MODEL LOADED
   modelLoaded(){
     sweep(400,1200,0.2,'sine',0.1);
@@ -647,266 +700,512 @@ function deactivateWake(){
 function resetWakeTimer(){clearTimeout(wakeTimer);wakeTimer=setTimeout(deactivateWake,WAKE_TIMEOUT);}
 
 // ── MUSIC SEARCH: YouTube via DuckDuckGo first ──
-async function playMusic(query){
-  SFX.music();
-  speak(`Playing ${query}.`);
-  setCoreState('processing');
-  notif('SEARCHING: '+query.toUpperCase());
-  // Try DuckDuckGo instant answer first for YouTube URL
-  try{
-    const ddg=await fetch(`https://api.duckduckgo.com/?q=${encodeURIComponent(query+' site:youtube.com')}&format=json&no_redirect=1`,{signal:AbortSignal.timeout(3000)});
-    const d=await ddg.json();
-    if(d.AbstractURL&&d.AbstractURL.includes('youtube.com')){
-      setTimeout(()=>window.open(d.AbstractURL,'_blank'),800);
-      setCoreState('idle');return;
-    }
-  }catch(e){}
-  // Fallback: direct YouTube search
-  setTimeout(()=>window.open('https://www.youtube.com/results?search_query='+encodeURIComponent(query),'_blank'),900);
-  setCoreState('idle');
+// ══════════════════════════════════════════
+//  MUSIC PLAYER (embedded YouTube via iframe)
+// ══════════════════════════════════════════
+let ytIframe = null, ytReady = false, currentSong = '';
+let musicProgressTimer = null;
+
+// Load YouTube IFrame API once
+function loadYTApi(){
+  if(window.YT || document.getElementById('yt-api-script')) return;
+  const s = document.createElement('script');
+  s.id = 'yt-api-script';
+  s.src = 'https://www.youtube.com/iframe_api';
+  document.head.appendChild(s);
 }
 
-// ── INTERNET SEARCH via DuckDuckGo ──
+window.onYouTubeIframeAPIReady = function(){
+  ytReady = true;
+};
+
+// Search YouTube via internal (no API key) scrape approach
+// Uses a CORS proxy to get YT search results
+async function searchYouTube(query){
+  // Use Invidious (open YouTube frontend) search API - no key needed
+  const instances = [
+    'https://invidious.snopyta.org',
+    'https://vid.puffyan.us',
+    'https://invidious.kavin.rocks',
+  ];
+  for(const base of instances){
+    try{
+      const r = await fetch(`${base}/api/v1/search?q=${encodeURIComponent(query)}&type=video&fields=videoId,title`,
+        {signal: AbortSignal.timeout(4000)});
+      if(!r.ok) continue;
+      const d = await r.json();
+      if(d && d[0]) return d[0];
+    }catch(e){ continue; }
+  }
+  return null;
+}
+
+async function playMusic(query){
+  SFX.music();
+  setCoreState('processing');
+  notif('SEARCHING: ' + query.toUpperCase());
+
+  const result = await searchYouTube(query);
+  if(!result){ speak(`Couldn't find ${query}. Try saying the song name more precisely.`); setCoreState('idle'); return; }
+
+  currentSong = result.title || query;
+  speak(`Playing ${currentSong}.`);
+  notif('NOW PLAYING: ' + currentSong.toUpperCase());
+  $('music-title').textContent = '♪ ' + currentSong;
+  $('music-player').classList.add('on');
+  loadYTApi();
+
+  // Embed YouTube player
+  const vid = result.videoId;
+  // Create or reuse iframe container
+  let wrap = document.getElementById('yt-wrap');
+  if(!wrap){ wrap = document.createElement('div'); wrap.id='yt-wrap'; wrap.style.cssText='position:fixed;bottom:100px;right:20px;width:1px;height:1px;opacity:0;pointer-events:none;z-index:1'; document.body.appendChild(wrap); }
+
+  const waitForYT = (cb) => {
+    if(window.YT && window.YT.Player) cb();
+    else setTimeout(()=>waitForYT(cb), 200);
+  };
+
+  waitForYT(()=>{
+    if(ytIframe){ ytIframe.destroy(); }
+    const div = document.createElement('div'); div.id='yt-player-div'; wrap.innerHTML=''; wrap.appendChild(div);
+    ytIframe = new YT.Player('yt-player-div',{
+      videoId: vid, width:1, height:1,
+      playerVars:{autoplay:1,controls:0,playsinline:1},
+      events:{
+        onReady: e => {
+          e.target.setVolume(Math.round(($('vol-sl').value||0.8)*100));
+          e.target.playVideo();
+          startProgressTracking();
+          setCoreState('active');
+          setTimeout(()=>setCoreState('idle'),1000);
+        },
+        onStateChange: e => {
+          if(e.data === 0){ // ended
+            $('m-play').textContent='▶';
+            $('music-progress-fill').style.width='100%';
+            clearInterval(musicProgressTimer);
+          }
+          if(e.data === 1) $('m-play').textContent='❚❚';
+          if(e.data === 2) $('m-play').textContent='▶';
+        }
+      }
+    });
+  });
+}
+
+function startProgressTracking(){
+  clearInterval(musicProgressTimer);
+  musicProgressTimer = setInterval(()=>{
+    if(!ytIframe || !ytIframe.getDuration) return;
+    try{
+      const cur = ytIframe.getCurrentTime()||0;
+      const dur = ytIframe.getDuration()||1;
+      const pct = Math.min(100,(cur/dur)*100);
+      $('music-progress-fill').style.width = pct+'%';
+      const fmt = s => `${Math.floor(s/60)}:${String(Math.floor(s%60)).padStart(2,'0')}`;
+      $('music-time').textContent = fmt(cur)+' / '+fmt(dur);
+    }catch(e){}
+  }, 500);
+}
+
+// Music controls
+$('m-play').addEventListener('click',()=>{
+  if(!ytIframe) return;
+  const state = ytIframe.getPlayerState();
+  if(state===1) ytIframe.pauseVideo(); else ytIframe.playVideo();
+});
+$('m-back').addEventListener('click',()=>{ if(ytIframe) ytIframe.seekTo(Math.max(0,(ytIframe.getCurrentTime()||0)-10),true); });
+$('m-fwd').addEventListener('click',()=>{ if(ytIframe) ytIframe.seekTo((ytIframe.getCurrentTime()||0)+10,true); });
+$('m-stop').addEventListener('click',()=>{
+  if(ytIframe){ ytIframe.stopVideo(); ytIframe.destroy(); ytIframe=null; }
+  clearInterval(musicProgressTimer);
+  $('music-player').classList.remove('on');
+  $('music-title').textContent='— NO TRACK —';
+  $('music-time').textContent='0:00 / 0:00';
+  $('music-progress-fill').style.width='0%';
+  currentSong='';
+});
+$('vol-sl').addEventListener('input',e=>{
+  if(ytIframe && ytIframe.setVolume) ytIframe.setVolume(Math.round(e.target.value*100));
+});
+
+// ══════════════════════════════════════════
+//  WEB SEARCH (DuckDuckGo API — speaks result, no new tab)
+// ══════════════════════════════════════════
 async function webSearch(query){
   SFX.search();
-  speak(`Searching for ${query}.`);
   setCoreState('processing');
   notif('SEARCHING: '+query.toUpperCase());
   try{
-    const r=await fetch(`https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1&skip_disambig=1`,{signal:AbortSignal.timeout(4000)});
-    const d=await r.json();
-    if(d.AbstractText&&d.AbstractText.length>20){
-      const summary=d.AbstractText.slice(0,300);
-      speak(summary);
-      setCoreState('idle');return summary;
-    } else if(d.Answer){
-      speak(d.Answer);
-      setCoreState('idle');return d.Answer;
-    } else if(d.RelatedTopics&&d.RelatedTopics.length>0){
-      const first=d.RelatedTopics[0].Text||'';
-      if(first){speak(first.slice(0,200));setCoreState('idle');return first;}
+    const r = await fetch(`https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1&skip_disambig=1`,
+      {signal:AbortSignal.timeout(5000)});
+    const d = await r.json();
+    let result = '';
+    if(d.Answer && d.Answer.length > 3) result = d.Answer;
+    else if(d.AbstractText && d.AbstractText.length > 20) result = d.AbstractText.slice(0,350);
+    else if(d.Definition && d.Definition.length > 10) result = d.Definition;
+    else if(d.RelatedTopics?.[0]?.Text) result = d.RelatedTopics[0].Text.slice(0,250);
+
+    if(result){
+      speak(result);
+      setCoreState('idle');
+      return result;
     }
   }catch(e){}
-  // If DDG gives nothing useful, open results page
-  window.open('https://duckduckgo.com/?q='+encodeURIComponent(query),'_blank');
+  // Nothing found — tell user
+  speak(`I couldn't find a direct answer for ${query}. Try rephrasing.`);
   setCoreState('idle');
   return '';
 }
 
-// ── COMMANDS ──
+// ══════════════════════════════════════════
+//  COMMAND HANDLER
+// ══════════════════════════════════════════
 function handleCmd(raw){
-  const m=raw.toLowerCase().trim();
-  // Music - broad pattern matching
-  const playMatch=m.match(/^(?:play|put on|play me|i want to hear|listen to)\s+(.+)/i);
-  if(playMatch){playMusic(playMatch[1].trim());return;}
-  // Search
-  const searchMatch=m.match(/^(?:search for|look up|search|find|google|what is|who is|tell me about)\s+(.+)/i);
-  if(searchMatch){webSearch(searchMatch[1].trim());return;}
-  // 3D files
-  if(m.match(/open.*(3d|stl|obj|ply|fbx|file|model|mesh)/i)){openFilePrompt();return;}
-  // Navigation
-  if(m.match(/open youtube/)){window.open('https://youtube.com','_blank');speak('Opening YouTube.');return;}
-  if(m.match(/open google/)){window.open('https://google.com','_blank');speak('Opening Google.');return;}
-  if(m.match(/^open (.+)/i)){const s=m.match(/^open\s+(.+)/i)[1];window.open('https://'+s.replace(/\s+/g,''),'_blank');speak(`Opening ${s}.`);return;}
-  // Builtins
-  if(m.match(/what.?s the time|what time/)){speak(`It's ${new Date().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'})}.`);return;}
-  if(m.match(/what.?s the date|what day/)){speak(`Today is ${new Date().toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric'})}.`);return;}
-  if(m.match(/status|how are you|systems/)){speak(`All systems nominal. Gesture tracking ${camReady?'active':'mouse fallback'}, microphone live, Ollama connected.`);return;}
-  if(m.match(/weather/)){const tmp=$('wtemp').textContent,cnd=$('wcond').textContent,cty=$('wcity').textContent;speak(cnd?`Currently ${tmp} and ${cnd} in ${cty}.`:`Weather loading.`);return;}
-  if(m.match(/go to sleep|sleep mode|standby/)){deactivateWake();speak('Going to standby. Say Jarvis to wake me.');return;}
-  if(m.match(/shut down/)){speak(`I'd rather stay online.`);return;}
-  if(m.match(/hello|^hi$|^hey$/)){speak([`At your service, ${userName}.`,`What can I do for you, ${userName}?`,`Online and ready.`][Math.floor(Math.random()*3)]);return;}
-  // AI fallback
+  const m = raw.toLowerCase().trim();
+
+  // Music controls
+  if(m.match(/pause.*music|music.*pause|stop.*music/)){
+    if(ytIframe) ytIframe.pauseVideo(); speak('Paused.'); return;
+  }
+  if(m.match(/resume.*music|play.*music$|unpause/)){
+    if(ytIframe) ytIframe.playVideo(); speak('Resuming.'); return;
+  }
+  if(m.match(/music.*(back|rewind|backward).*(10|ten)|back.*10.*second/)){
+    if(ytIframe) ytIframe.seekTo(Math.max(0,(ytIframe.getCurrentTime()||0)-10),true);
+    speak('Back ten seconds.'); return;
+  }
+  if(m.match(/music.*(forward|skip|ahead).*(10|ten)|forward.*10.*second/)){
+    if(ytIframe) ytIframe.seekTo((ytIframe.getCurrentTime()||0)+10,true);
+    speak('Forward ten seconds.'); return;
+  }
+  if(m.match(/music.*louder|volume.*(up|louder)/)){
+    const v = Math.min(100,(($('vol-sl').value||0.8)*100)+15);
+    $('vol-sl').value=v/100; if(ytIframe)ytIframe.setVolume(v); speak('Volume up.'); return;
+  }
+  if(m.match(/music.*quieter|volume.*(down|lower|quiet)/)){
+    const v = Math.max(0,(($('vol-sl').value||0.8)*100)-15);
+    $('vol-sl').value=v/100; if(ytIframe)ytIframe.setVolume(v); speak('Volume down.'); return;
+  }
+  if(m.match(/stop.*music|close.*music|music.*stop/)){
+    $('m-stop').click(); speak('Music stopped.'); return;
+  }
+
+  // Play song
+  const playM = m.match(/^(?:play|put on|play me|i want to hear|listen to)\s+(.+)/i);
+  if(playM){ playMusic(playM[1].trim()); return; }
+
+  // Search (speaks result, no tab)
+  const searchM = m.match(/^(?:search for|look up|search|find|what is|who is|tell me about|what are|how do|why is|when did|where is)\s+(.+)/i);
+  if(searchM){ webSearch(searchM[1].trim()); return; }
+
+  // 3D file
+  if(m.match(/open.*(3d|stl|obj|ply|fbx|file|model|mesh)/i)){ openFilePrompt(); return; }
+
+  // Time / date
+  if(m.match(/what.?s the time|what time/)){ speak(`It's ${new Date().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'})}.`); return; }
+  if(m.match(/what.?s the date|what day/)){ speak(`Today is ${new Date().toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric'})}.`); return; }
+
+  // Status
+  if(m.match(/status|how are you|systems/)){ speak(`All systems nominal. Gesture tracking ${camReady?'active':'mouse fallback'}, mic live.`); return; }
+
+  // Weather
+  if(m.match(/weather/)){ const t=$('wtemp').textContent,cn=$('wcond').textContent,cy=$('wcity').textContent; speak(cn?`Currently ${t} and ${cn} in ${cy}.`:`Weather loading.`); return; }
+
+  // Sleep
+  if(m.match(/go to sleep|sleep mode|standby/)){ deactivateWake(); speak('Going to standby.'); return; }
+  if(m.match(/shut down/)){ speak(`I'd rather stay online.`); return; }
+  if(m.match(/hello|^hi$|^hey$/)){ speak([`At your service, ${userName}.`,`What can I do for you?`,`Online and ready.`][Math.floor(Math.random()*3)]); return; }
+
   sendAI(raw);
 }
 
-// ── LOCAL AI (Ollama only) ──
+// ══════════════════════════════════════════
+//  LOCAL AI (Ollama)
+// ══════════════════════════════════════════
 async function sendAI(msg){
-  setCoreState('processing');
-  SFX.processingStart();
-  const sys=`You are Jarvis, Tony Stark's AI assistant. Witty, sophisticated, dry British humour. Natural speech - NOT robotic. Concise. If asked to search, start with SEARCH: then the query. User: ${userName}.`;
+  setCoreState('processing'); SFX.processingStart();
+  const sys = `You are Jarvis, Tony Stark's AI. Witty, sophisticated, dry British humour. Natural — NOT robotic. Concise. If you need to search the web, reply only with: SEARCH:<query>. User: ${userName}.`;
   convoHistory.push({role:'user',content:msg});
   try{
-    const r=await fetch('http://localhost:11434/api/chat',{
-      method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({model:currentModel,messages:[{role:'system',content:sys},...convoHistory.slice(-8)],stream:false})
+    const r = await fetch('http://localhost:11434/api/chat',{
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({model:currentModel, messages:[{role:'system',content:sys},...convoHistory.slice(-8)], stream:false})
     });
-    if(!r.ok)throw new Error('ollama');
-    const d=await r.json();
-    let resp=d.message?.content||'';
-    // Handle SEARCH: directive from model
+    if(!r.ok) throw new Error('ollama');
+    const d = await r.json();
+    let resp = d.message?.content || '';
     if(resp.startsWith('SEARCH:')){
-      const q=resp.replace('SEARCH:','').trim();
-      const result=await webSearch(q);
-      if(result){convoHistory.push({role:'assistant',content:result});}
-      SFX.processingEnd();setCoreState('idle');return;
+      const q = resp.replace('SEARCH:','').trim();
+      const result = await webSearch(q);
+      if(result) convoHistory.push({role:'assistant',content:result});
+      SFX.processingEnd(); setCoreState('idle'); return;
     }
     convoHistory.push({role:'assistant',content:resp});
-    if(convoHistory.length>18)convoHistory=convoHistory.slice(-12);
-    SFX.processingEnd();
-    speak(resp);
+    if(convoHistory.length>18) convoHistory=convoHistory.slice(-12);
+    SFX.processingEnd(); speak(resp);
   }catch(e){
     SFX.error();
-    const fb=`I couldn't reach Ollama, ${userName}. Make sure it's running with: ollama serve`;
-    speak(fb);
-    notif('OLLAMA OFFLINE → run: ollama serve && ollama pull llama3');
+    speak(`Can't reach Ollama. Run: ollama serve`);
+    notif('OLLAMA OFFLINE → ollama serve && ollama pull llama3');
     setTimeout(()=>setCoreState('idle'),600);
   }
 }
 
-// ── CAMERA + GESTURE ──
-let gestGC=document.createElement('canvas'),gestGCX=gestGC.getContext('2d');
-let prevGest='none',gestCD=0,handConf=0,handStr='NO HAND';
-// Finger tip landmarks (approximate from blob analysis)
-let handLandmarks=[];
 
-function startCam(stream){
-  const vidH=$('vid-hidden');
-  vidH.srcObject=stream;
-  $('cam-feed').srcObject=stream;$('cam-feed').classList.add('on');
-  $('cam-ov').style.display='block';$('cam-ov').width=130;$('cam-ov').height=98;
-  vidH.onloadeddata=()=>{
-    camReady=true;
-    $('cam-dot').classList.add('on');$('cam-lbl').textContent='CAM ONLINE';
-    $('rd-gest').textContent='ACTIVE';$('rd-gest').style.color='var(--g)';
-    notif('CAMERA ONLINE');SFX.confirm();
-    (function loop(){if(!camReady)return;processGesture(vidH);requestAnimationFrame(loop);})();
+// ── CAMERA + GESTURE (MediaPipe Hands) ──
+// Uses MediaPipe Hands for real 21-landmark tracking
+// Loaded from CDN — no install needed
+let hands = null, mpCamera = null;
+// (vars declared in state section above)
+
+// MediaPipe landmark indices
+const MP = {
+  WRIST:0, THUMB_TIP:4, INDEX_TIP:8, MIDDLE_TIP:12, RING_TIP:16, PINKY_TIP:20,
+  INDEX_MCP:5, INDEX_PIP:6, INDEX_DIP:7,
+  MIDDLE_MCP:9, RING_MCP:13, PINKY_MCP:17,
+};
+
+function startCam(stream) {
+  // Show the cam feed
+  $('cam-feed').srcObject = stream;
+  $('cam-feed').classList.add('on');
+  const camOv = $('cam-ov');
+  if(camOv){ camOv.classList.add('on'); camOv.width=130; camOv.height=98; }
+
+  // Load MediaPipe Hands
+  const script1 = document.createElement('script');
+  script1.src = 'https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js';
+  const script2 = document.createElement('script');
+  script2.src = 'https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js';
+  const script3 = document.createElement('script');
+  script3.src = 'https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js';
+
+  script3.onload = () => {
+    initMediaPipe(stream);
   };
+
+  document.head.appendChild(script1);
+  document.head.appendChild(script2);
+  document.head.appendChild(script3);
 }
 
-function processGesture(vid){
-  const FW=160,FH=120;
-  gestGC.width=FW;gestGC.height=FH;
-  gestGCX.drawImage(vid,0,0,FW,FH);
-  const px=gestGCX.getImageData(0,0,FW,FH).data;
+function initMediaPipe(stream) {
+  hands = new Hands({locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}`});
+  hands.setOptions({
+    maxNumHands: 1,
+    modelComplexity: 1,
+    minDetectionConfidence: 0.7,
+    minTrackingConfidence: 0.6,
+  });
 
-  // Build skin pixel map
-  let skinMap=new Uint8Array(FW*FH);
-  let sx=0,sy=0,n=0,minX=FW,maxX=0,minY=FH,maxY=0;
-  for(let y=2;y<FH-2;y++)for(let x=2;x<FW-2;x++){
-    const i=(y*FW+x)*4;
-    if(isSkin(px[i],px[i+1],px[i+2])){
-      skinMap[y*FW+x]=1;sx+=x;sy+=y;n++;
-      if(x<minX)minX=x;if(x>maxX)maxX=x;if(y<minY)minY=y;if(y>maxY)maxY=y;
-    }
+  hands.onResults(onHandResults);
+
+  const vid = $('cam-feed');
+  mpCamera = new Camera(vid, {
+    onFrame: async () => { await hands.send({image: vid}); },
+    width: 320, height: 240,
+  });
+  mpCamera.start().then(() => {
+    camReady = true;
+    $('cam-dot').classList.add('on');
+    $('cam-lbl').textContent = 'CAM ONLINE';
+    $('rd-gest').textContent = 'MEDIAPIPE';
+    $('rd-gest').style.color = 'var(--g)';
+    notif('MEDIAPIPE HANDS ACTIVE');
+    SFX.confirm();
+  }).catch(e => {
+    // Fallback: use stream directly without Camera util
+    const vid2 = $('vid-hidden');
+    vid2.srcObject = stream;
+    vid2.onloadeddata = () => {
+      camReady = true;
+      $('cam-dot').classList.add('on');
+      $('cam-lbl').textContent = 'CAM ONLINE';
+      notif('CAM ONLINE (direct mode)');
+      // Process at 15fps
+      setInterval(async () => {
+        if (hands) await hands.send({image: vid2});
+      }, 66);
+    };
+  });
+}
+
+function onHandResults(results) {
+  const ov = $('cam-ov');
+  const ovCtx = ov.getContext('2d');
+  ov.width = 130; ov.height = 98;
+  // Always clear first — blank canvas when no hand
+  ov.width = 130; ov.height = 98; // reassigning width clears canvas
+  ovCtx.clearRect(0, 0, 130, 98);
+
+  if (!results.multiHandLandmarks || results.multiHandLandmarks.length === 0) {
+    handDetected = false;
+    handStr = 'NO HAND';
+    handConf = 0;
+    handLandmarks = [];
+    if($('rd-hand')) $('rd-hand').textContent = '--';
+    if($('br-gest')) $('br-gest').textContent = 'NO HAND';
+    if($('br-conf')) $('br-conf').textContent = '0%';
+    // Draw "no hand" indicator subtly
+    ovCtx.fillStyle = 'rgba(255,34,68,0.3)';
+    ovCtx.font = '7px monospace';
+    ovCtx.fillText('NO HAND', 4, 88);
+    return; // NOTHING ELSE DRAWN
   }
 
-  handConf=Math.min(100,Math.round(n/10));
-  const oc=$('cam-ov').getContext('2d');
-  oc.clearRect(0,0,130,98);
-  const scX=130/FW,scY=98/FH;
+  handDetected = true;
+  handLandmarks = results.multiHandLandmarks[0]; // 21 points
+  handConf = Math.round((results.multiHandedness?.[0]?.score || 0.9) * 100);
 
-  if(n>300){
-    handDetected=true;
-    // Centroid → cursor position (mirrored, bounded away from panels)
-    const cx_=(sx/n)/FW, cy_=(sy/n)/FH;
-    camMx=(1-cx_)*(W-400)+200;
-    camMy=cy_*(H-140)+60;
-    mx=camMx;my=camMy; // update cursor
+  // Map index fingertip to screen coords (mirrored — selfie cam)
+  const tip = handLandmarks[MP.INDEX_TIP];
+  mx = (1 - tip.x) * (W - 400) + 200;
+  my = tip.y * (H - 140) + 60;
 
-    const bW=maxX-minX,bH=maxY-minY;
+  // ── GESTURE DETECTION from landmarks ──
+  const thumbTip  = handLandmarks[MP.THUMB_TIP];
+  const indexTip  = handLandmarks[MP.INDEX_TIP];
+  const middleTip = handLandmarks[MP.MIDDLE_TIP];
+  const ringTip   = handLandmarks[MP.RING_TIP];
+  const pinkyTip  = handLandmarks[MP.PINKY_TIP];
+  const wrist     = handLandmarks[MP.WRIST];
+  const indexMcp  = handLandmarks[MP.INDEX_MCP];
 
-    // Find finger tips: scan top of blob row by row, find local minima in skin boundary
-    // Simple approach: find the topmost skin pixels at regular x intervals
-    handLandmarks=[];
-    const palmY=(minY+maxY)/2;
-    // Scan columns and find topmost skin pixel — these approximate fingertips
-    const colStep=Math.max(1,Math.floor(bW/8));
-    for(let x=minX;x<=maxX;x+=colStep){
-      for(let y=minY;y<palmY;y++){
-        if(skinMap[y*FW+x]){
-          // Check it's actually a top edge (pixel above is not skin)
-          if(y===0||!skinMap[(y-1)*FW+x]){
-            handLandmarks.push({x:(1-(x/FW))*130,y:(y/FH)*98});
-            break;
-          }
-        }
-      }
-    }
+  // Pinch: thumb tip close to index tip
+  const pinchDist = Math.hypot(thumbTip.x - indexTip.x, thumbTip.y - indexTip.y);
+  const isPinch = pinchDist < 0.07;
 
-    // Gesture: open palm = many fingertips spread out, fist/pinch = compact blob
-    const aspectRatio=bH/Math.max(1,bW);
-    const compactness=n/(bW*bH||1);
-    // Open palm: tall (fingers extend), spread pixels; fist: compact, round
-    const isOpen=aspectRatio>0.7&&n>700&&bH>bW*0.5;
-    const g=isOpen?'open':'pinch';
-    handStr=isOpen?'OPEN PALM':'PINCH';
-    $('rd-hand').textContent=handStr;$('br-gest').textContent=handStr;$('br-conf').textContent=handConf+'%';
+  // Open palm: all fingertips above their MCP joints (fingers extended)
+  const fingersUp = [
+    indexTip.y  < handLandmarks[MP.INDEX_MCP].y,
+    middleTip.y < handLandmarks[MP.MIDDLE_MCP].y,
+    ringTip.y   < handLandmarks[MP.RING_MCP].y,
+    pinkyTip.y  < handLandmarks[MP.PINKY_MCP].y,
+  ].filter(Boolean).length;
+  const isOpenPalm = fingersUp >= 3;
 
-    // Only trigger gesture change after cooldown
-    if(g!==prevGest&&gestCD<=0){gestCD=20;prevGest=g;onGrab(g==='pinch');}
+  // Point: only index finger extended
+  const isPoint = indexTip.y < handLandmarks[MP.INDEX_MCP].y
+    && middleTip.y >= handLandmarks[MP.MIDDLE_MCP].y
+    && ringTip.y   >= handLandmarks[MP.RING_MCP].y;
 
-    // Draw on cam overlay
-    // Bounding box
-    oc.strokeStyle='rgba(0,216,255,0.7)';oc.lineWidth=1;
-    oc.strokeRect(minX*scX,minY*scY,bW*scX,bH*scY);
-    // Label
-    oc.fillStyle='rgba(0,216,255,0.7)';oc.font='7px monospace';
-    oc.fillText(handStr,minX*scX,Math.max(8,minY*scY-2));
-    // Finger tip dots
-    handLandmarks.forEach(pt=>{
-      oc.beginPath();oc.arc(pt.x,pt.y,2.5,0,Math.PI*2);
-      oc.fillStyle='rgba(0,255,136,0.9)';oc.fill();
-    });
-    // Connect fingertip dots
-    if(handLandmarks.length>1){
-      oc.beginPath();oc.strokeStyle='rgba(0,255,136,0.4)';oc.lineWidth=0.8;
-      handLandmarks.forEach((pt,i)=>{i===0?oc.moveTo(pt.x,pt.y):oc.lineTo(pt.x,pt.y);});
-      oc.stroke();
-    }
-    // Palm center cross
-    const pcx=(1-(sx/n)/FW)*130,pcy=(sy/n)/FH*98;
-    oc.strokeStyle='rgba(0,216,255,0.6)';oc.lineWidth=0.8;
-    oc.beginPath();oc.moveTo(pcx-5,pcy);oc.lineTo(pcx+5,pcy);oc.stroke();
-    oc.beginPath();oc.moveTo(pcx,pcy-5);oc.lineTo(pcx,pcy+5);oc.stroke();
+  const g = isPinch ? 'pinch' : isOpenPalm ? 'open' : isPoint ? 'point' : 'fist';
+  handStr = isPinch ? 'PINCH' : isOpenPalm ? 'OPEN PALM' : isPoint ? 'POINT' : 'FIST';
 
-  }else{
-    handDetected=false;handStr='NO HAND';handConf=0;handLandmarks=[];
-    $('rd-hand').textContent='--';$('br-conf').textContent='0%';
-    // Don't update mx/my when no hand - mouse takes over
+  if (g !== prevGest && gestCD <= 0) {
+    gestCD = 8; // shorter cooldown with real tracking
+    prevGest = g;
+    onGrab(g === 'pinch');
   }
-  if(gestCD>0)gestCD--;
+  if (gestCD > 0) gestCD--;
+
+  $('rd-hand').textContent = handStr;
+  $('br-gest').textContent = handStr;
+  $('br-conf').textContent = handConf + '%';
+
+  // ── DRAW LANDMARKS ON CAM OVERLAY ──
+  const scX = 130, scY = 98; // overlay is 130x98
+
+  // Draw skeleton connections
+  const CONNECTIONS = [
+    // Thumb
+    [0,1],[1,2],[2,3],[3,4],
+    // Index
+    [0,5],[5,6],[6,7],[7,8],
+    // Middle
+    [9,10],[10,11],[11,12],
+    // Ring
+    [13,14],[14,15],[15,16],
+    // Pinky
+    [17,18],[18,19],[19,20],
+    // Palm
+    [0,5],[5,9],[9,13],[13,17],[0,17],
+  ];
+
+  ovCtx.strokeStyle = 'rgba(0,216,255,0.45)';
+  ovCtx.lineWidth = 0.8;
+  CONNECTIONS.forEach(([a, b]) => {
+    const la = handLandmarks[a], lb = handLandmarks[b];
+    if (!la || !lb) return;
+    ovCtx.beginPath();
+    ovCtx.moveTo((1 - la.x) * scX, la.y * scY);
+    ovCtx.lineTo((1 - lb.x) * scX, lb.y * scY);
+    ovCtx.stroke();
+  });
+
+  // Draw joints
+  handLandmarks.forEach((lm, i) => {
+    const x = (1 - lm.x) * scX;
+    const y = lm.y * scY;
+    const isTip = [4,8,12,16,20].includes(i);
+    const isWrist = i === 0;
+    ovCtx.beginPath();
+    ovCtx.arc(x, y, isTip ? 3 : isWrist ? 2.5 : 1.5, 0, Math.PI * 2);
+    ovCtx.fillStyle = isTip ? 'rgba(0,255,136,0.9)' : isWrist ? 'rgba(255,102,0,0.8)' : 'rgba(0,216,255,0.7)';
+    ovCtx.fill();
+  });
+
+  // Pinch indicator line
+  if (isPinch) {
+    ovCtx.strokeStyle = 'rgba(0,255,136,0.9)';
+    ovCtx.lineWidth = 1.5;
+    ovCtx.beginPath();
+    ovCtx.moveTo((1 - thumbTip.x) * scX, thumbTip.y * scY);
+    ovCtx.lineTo((1 - indexTip.x) * scX, indexTip.y * scY);
+    ovCtx.stroke();
+    // Pinch distance label
+    ovCtx.fillStyle = 'rgba(0,255,136,0.8)';
+    ovCtx.font = '7px monospace';
+    ovCtx.fillText('PINCH', 4, 10);
+  }
+
+  // Gesture label
+  ovCtx.fillStyle = 'rgba(0,216,255,0.7)';
+  ovCtx.font = '7px monospace';
+  ovCtx.fillText(handStr, 4, scY - 4);
 }
 
-function isSkin(r,g,b){
-  const Y=0.299*r+0.587*g+0.114*b;
-  const Cb=128-0.168736*r-0.331264*g+0.5*b;
-  const Cr=128+0.5*r-0.418688*g-0.081312*b;
-  return Y>80&&Cb>77&&Cb<127&&Cr>133&&Cr<173;
+function isSkin(){} // kept as stub so no reference errors
+
+function onGrab(on) {
+  pinching = on;
+  if (on) { SFX.grab(); if (!viewerOpen) setCoreState('active'); }
+  else { SFX.release(); if (!viewerOpen) setTimeout(() => { if (!speaking && !listening) setCoreState(wakeActive ? 'listening' : 'idle'); }, 500); }
 }
 
-function onGrab(on){
-  pinching=on;
-  if(on){SFX.grab();if(!viewerOpen)setCoreState('active');}
-  else{SFX.release();if(!viewerOpen)setTimeout(()=>{if(!speaking&&!listening)setCoreState(wakeActive?'listening':'idle');},500);}
-}
 
 // ── 3D VIEWER ──
 function openFilePrompt(){
-  SFX.fileOpen();speak('Opening file browser.');
+  SFX.fileOpen();
+  // Opens the OS native file explorer — no "fake" dialog
   $('file-input').click();
+}
+
+function loadFile(file){
+  const ext = file.name.split('.').pop().toLowerCase();
+  $('file-drop').style.display='flex';
+  const reader = new FileReader();
+  reader.onload = function(ev){
+    $('file-drop').style.display='none';
+    try{
+      if(ext==='stl') parseSTL(ev.target.result, file.name);
+      else if(ext==='obj') parseOBJ(ev.target.result, file.name);
+      else if(ext==='ply') parsePLY(ev.target.result, file.name);
+      else{ speak('Format not fully supported. Showing placeholder.'); parseSphere(file.name); }
+      openViewer(file.name);
+    }catch(err){ $('file-drop').style.display='none'; speak('File parsing failed.'); console.error(err); }
+  };
+  if(ext==='stl') reader.readAsArrayBuffer(file); else reader.readAsText(file);
 }
 $('viewer-close').addEventListener('click',()=>{
   viewerOpen=false;$('viewer-wrap').classList.remove('on');
   if(viewerAnim)cancelAnimationFrame(viewerAnim);speak('3D viewer closed.');
 });
 $('file-input').addEventListener('change',function(e){
-  const file=e.target.files[0];if(!file)return;
-  $('file-drop').style.display='block';
-  const ext=file.name.split('.').pop().toLowerCase();
-  const reader=new FileReader();
-  reader.onload=function(ev){
-    $('file-drop').style.display='none';
-    try{
-      if(ext==='stl')parseSTL(ev.target.result,file.name);
-      else if(ext==='obj')parseOBJ(ev.target.result,file.name);
-      else if(ext==='ply')parsePLY(ev.target.result,file.name);
-      else{speak('Format not fully supported. Showing placeholder.');parseSphere(file.name);}
-      openViewer(file.name);
-    }catch(err){$('file-drop').style.display='none';speak('File parsing failed.');console.error(err);}
-  };
-  if(ext==='stl')reader.readAsArrayBuffer(file);else reader.readAsText(file);
-  e.target.value='';
+  const file=e.target.files[0]; if(!file)return;
+  loadFile(file); e.target.value='';
 });
 
 function parseSTL(data,name){
@@ -1176,148 +1475,144 @@ function frame(ts){
 document.querySelectorAll('[data-m]').forEach(b=>{b.addEventListener('click',()=>{document.querySelectorAll('[data-m]').forEach(q=>q.classList.remove('on'));b.classList.add('on');currentModel=b.dataset.m;currentProvider=b.dataset.p||'ollama';if($('mlbl'))$('mlbl').textContent=b.textContent;notif('MODEL: '+b.textContent);SFX.model();});});
 
 // ── BOOT SEQUENCE ──
-const BOOT_LINES=[
-  {t:'INITIALIZING SPATIAL INTERFACE ENGINE',d:200},
-  {t:'LOADING RENDERING SUBSYSTEM',d:350},
-  {t:'CALIBRATING GESTURE RECOGNITION',d:500},
-  {t:'CONNECTING TO SPEECH PIPELINE',d:700},
-  {t:'CHECKING WHISPER.CPP SERVER',d:900},
-  {t:'LOADING LANGUAGE MODEL: LLAMA3',d:1100},
-  {t:'ESTABLISHING NEURAL PATHWAYS',d:1400},
-  {t:'FETCHING ENVIRONMENTAL DATA',d:1600},
-  {t:'ACTIVATING VOICE SYNTHESIS',d:1800},
-  {t:'BOOT SEQUENCE COMPLETE',d:2000},
-];
 
-function runBootSequence(onDone){
-  const overlay=$('boot-overlay');
-  const logo=$('boot-logo');
-  const lines=$('boot-lines');
-  const bar=$('boot-bar');
-  const status=$('boot-status');
-  if(!overlay){onDone();return;}
-
-  overlay.style.display='flex';overlay.style.opacity='1';
-  // Fade in logo
-  setTimeout(()=>{logo.style.opacity='1';},100);
-
-  BOOT_LINES.forEach((line,i)=>{
-    setTimeout(()=>{
-      SFX.bootLine();
-      const el=document.createElement('div');
-      el.style.cssText='opacity:0;transition:opacity 0.3s;color:rgba(0,216,255,0.7);font-size:9px;letter-spacing:0.18em;';
-      el.textContent='> '+line.t;
-      lines.appendChild(el);
-      setTimeout(()=>el.style.opacity='1',50);
-      bar.style.width=((i+1)/BOOT_LINES.length*100)+'%';
-      status.textContent=line.t;
-      // Keep only last 6 lines
-      while(lines.children.length>6)lines.removeChild(lines.firstChild);
-    },line.d);
-  });
-
-  // Check Ollama and pre-load model into memory during boot
-  setTimeout(async()=>{
-    function addBootLine(text, color){
-      const el=document.createElement('div');
-      el.style.cssText=`color:${color};font-size:9px;letter-spacing:0.18em;`;
-      el.textContent=text; lines.appendChild(el);
-      while(lines.children.length>7)lines.removeChild(lines.firstChild);
-    }
-    try{
-      // Check available models
-      const r=await fetch('http://localhost:11434/api/tags',{signal:AbortSignal.timeout(2000)});
-      const d=await r.json();
-      const models=(d.models||[]).map(m=>m.name.split(':')[0]);
-      addBootLine('> OLLAMA ONLINE: '+(models.slice(0,3).join(', ')||'no models found'),'rgba(0,255,136,0.8)');
-      SFX.modelLoaded();
-      // Pre-warm: send a tiny message to load model into GPU/RAM during boot
-      // This means first real request is instant instead of slow
-      addBootLine('> PRE-LOADING MODEL: '+currentModel+'...','rgba(0,216,255,0.6)');
-      status.textContent='LOADING MODEL INTO MEMORY...';
-      try{
-        await fetch('http://localhost:11434/api/generate',{
-          method:'POST', headers:{'Content-Type':'application/json'},
-          signal:AbortSignal.timeout(30000),
-          body:JSON.stringify({model:currentModel, prompt:'hi', stream:false, options:{num_predict:1}})
-        });
-        addBootLine('> MODEL LOADED AND READY','rgba(0,255,136,0.8)');
-        SFX.confirm();
-      }catch(e){
-        addBootLine('> MODEL PRE-LOAD SKIPPED (will load on first use)','rgba(255,160,0,0.6)');
-      }
-    }catch(e){
-      addBootLine('> OLLAMA OFFLINE — run: ollama serve && ollama pull llama3','rgba(255,102,0,0.8)');
-      SFX.error();
-    }
-  },1100);
-
-  setTimeout(()=>{
-    status.textContent='SYSTEM READY';bar.style.width='100%';
-    SFX.boot();
-    setTimeout(()=>{
-      overlay.style.transition='opacity 0.8s';
-      overlay.style.opacity='0';
-      setTimeout(()=>{overlay.style.display='none';onDone();},900);
-    },600);
-  },2400);
-}
-
-// ── IDENTIFY + LAUNCH ──
-$('id-in').focus();
-$('id-in').addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();$('launch-btn').focus();$('launch-btn').click();}});
-$('launch-btn').addEventListener('click',function(){
-  const name=$('id-in').value.trim();
-  if(!name){$('id-err').textContent='NAME REQUIRED';$('id-in').focus();return;}
-  userName=name;if($('bot-user'))$('bot-user').textContent=name.toUpperCase();
-  this.textContent='LAUNCHING...';this.disabled=true;
-
-  // CAMERA inline
-  navigator.mediaDevices.getUserMedia({video:{width:{ideal:320},height:{ideal:240},facingMode:'user'},audio:false})
-    .then(stream=>startCam(stream))
-    .catch(err=>{notif('Camera: '+err.name,'warn');if($('cam-lbl'))$('cam-lbl').textContent='CAM: '+err.name;});
-
-  // MIC permission then startMic
-  navigator.mediaDevices.getUserMedia({audio:true,video:false})
-    .then(stream=>{stream.getTracks().forEach(t=>t.stop());startMic();})
-    .catch(err=>{
-      if(err.name==='NotAllowedError'){notif('Mic denied','warn');if($('mic-lbl'))$('mic-lbl').textContent='MIC DENIED';}
-      else startMic();
-    });
-
-  $('id-fill').style.width='100%';
-  setTimeout(()=>{
-    $('id').style.transition='opacity 0.5s';$('id').style.opacity='0';
-    setTimeout(()=>{
-      $('id').style.display='none';
-      // Run boot sequence, then main boot
-      runBootSequence(()=>boot());
-    },550);
-  },200);
+// ══════════════════════════════════════════
+//  DRAG AND DROP (always active)
+// ══════════════════════════════════════════
+let dragCounter = 0;
+document.addEventListener('dragenter', e => {
+  e.preventDefault(); dragCounter++;
+  if(dragCounter > 0) $('drag-overlay').classList.add('show');
+});
+document.addEventListener('dragleave', e => {
+  e.preventDefault(); dragCounter--;
+  if(dragCounter <= 0){ dragCounter=0; $('drag-overlay').classList.remove('show'); }
+});
+document.addEventListener('dragover', e => e.preventDefault());
+document.addEventListener('drop', e => {
+  e.preventDefault(); dragCounter=0; $('drag-overlay').classList.remove('show');
+  const file = e.dataTransfer.files[0];
+  if(!file) return;
+  const ext = file.name.split('.').pop().toLowerCase();
+  if(!['stl','obj','ply','fbx','3ds'].includes(ext)){
+    speak(`${ext.toUpperCase()} is not a supported 3D format.`); return;
+  }
+  loadFile(file);
 });
 
+// ── IDENTIFY + LAUNCH (with localStorage) ──
+function checkSavedUser(){
+  try{
+    const saved = localStorage.getItem('jarvis_user');
+    if(saved){
+      const data = JSON.parse(saved);
+      if(data.name){
+        userName = data.name;
+        if($('bot-user')) $('bot-user').textContent = data.name.toUpperCase();
+        return true; // skip identify screen
+      }
+    }
+  }catch(e){}
+  return false;
+}
+
+function saveUser(name){
+  try{ localStorage.setItem('jarvis_user', JSON.stringify({name, saved: Date.now()})); }catch(e){}
+}
+
+function launchSystems(){
+  // CAMERA — must be in click/interaction context
+  navigator.mediaDevices.getUserMedia({video:{width:{ideal:320},height:{ideal:240},facingMode:'user'},audio:false})
+    .then(stream => startCam(stream))
+    .catch(err => { notif('Camera: '+err.name,'warn'); if($('cam-lbl')) $('cam-lbl').textContent='CAM: '+err.name; });
+
+  // MIC
+  navigator.mediaDevices.getUserMedia({audio:true,video:false})
+    .then(stream => { stream.getTracks().forEach(t=>t.stop()); startMic(); })
+    .catch(err => {
+      if(err.name==='NotAllowedError'){ notif('Mic denied','warn'); if($('mic-lbl')) $('mic-lbl').textContent='MIC DENIED'; }
+      else startMic();
+    });
+}
+
+// Check localStorage first
+if(checkSavedUser()){
+  // Returning user — skip identify screen immediately
+  $('id').style.display='none';
+  // Still need a click to get permissions — show a minimal "Welcome back" button
+  const wb = document.createElement('div');
+  wb.id = 'welcome-back';
+  wb.style.cssText = `position:fixed;inset:0;z-index:900;background:#000;display:flex;
+    align-items:center;justify-content:center;flex-direction:column;gap:20px;font-family:'Orbitron',monospace`;
+  wb.innerHTML = `
+    <div style="font-size:clamp(14px,2.5vw,28px);letter-spacing:0.4em;color:#00d8ff;text-shadow:0 0 40px #00d8ff">
+      WELCOME BACK, ${userName.toUpperCase()}
+    </div>
+    <button id="wb-btn" style="font-family:'Orbitron',monospace;font-size:10px;letter-spacing:0.3em;
+      text-transform:uppercase;padding:10px 32px;border:1px solid rgba(0,216,255,0.5);
+      background:transparent;color:#00d8ff;cursor:pointer;border-radius:2px;
+      box-shadow:0 0 20px rgba(0,216,255,0.1)">
+      ENTER
+    </button>
+    <div style="font-size:8px;letter-spacing:0.25em;color:rgba(0,216,255,0.3)">
+      NOT ${userName.toUpperCase()}? 
+      <span style="cursor:pointer;text-decoration:underline;pointer-events:auto" 
+        onclick="localStorage.removeItem('jarvis_user');location.reload()">SWITCH USER</span>
+    </div>
+  `;
+  document.body.appendChild(wb);
+  document.getElementById('wb-btn').addEventListener('click', function(){
+    launchSystems();
+    wb.style.transition='opacity 0.5s'; wb.style.opacity='0';
+    setTimeout(()=>{ wb.style.display='none'; boot(); }, 550);
+  });
+} else {
+  // New user — show identify screen
+  $('id-in').focus();
+  $('id-in').addEventListener('keydown', e => {
+    if(e.key==='Enter'){ e.preventDefault(); $('launch-btn').focus(); $('launch-btn').click(); }
+  });
+  $('launch-btn').addEventListener('click', function(){
+    const name = $('id-in').value.trim();
+    if(!name){ $('id-err').textContent='NAME REQUIRED'; $('id-in').focus(); return; }
+    userName = name;
+    if($('bot-user')) $('bot-user').textContent = name.toUpperCase();
+    saveUser(name);
+    this.textContent='LAUNCHING...'; this.disabled=true;
+    launchSystems();
+    $('id-fill').style.width='100%';
+    setTimeout(()=>{
+      $('id').style.transition='opacity 0.5s'; $('id').style.opacity='0';
+      setTimeout(()=>{ $('id').style.display='none'; boot(); }, 550);
+    }, 200);
+  });
+}
+
 function boot(){
-  hx=CX;hy=CY;
-  jVoice=findMaleVoice();setTimeout(()=>{jVoice=findMaleVoice();},600);
-  updateData();updateBattery();fetchWeather();
-  setInterval(updateData,3000);setInterval(updateBattery,15000);
+  hx=CX; hy=CY;
+  SFX.boot(); // startup SFX fires the moment user authenticates
+  jVoice=findMaleVoice(); setTimeout(()=>{ jVoice=findMaleVoice(); },600);
+  loadYTApi(); // preload YT iframe API
+  updateData(); updateBattery(); fetchWeather();
+  setInterval(updateData,3000); setInterval(updateBattery,15000);
   requestAnimationFrame(frame);
+  // Pre-warm Ollama model in background
+  setTimeout(async()=>{
+    try{
+      await fetch('http://localhost:11434/api/generate',{
+        method:'POST',headers:{'Content-Type':'application/json'},
+        signal:AbortSignal.timeout(30000),
+        body:JSON.stringify({model:currentModel,prompt:'hi',stream:false,options:{num_predict:1}})
+      });
+      notif('OLLAMA READY');
+    }catch(e){ notif('OLLAMA OFFLINE → run: ollama serve && ollama pull llama3','warn'); }
+  },1500);
   setTimeout(()=>{
     jVoice=findMaleVoice();
-    speak(`Welcome, ${userName}. Jarvis online. Boot sequence complete. Say "Jarvis" to activate voice control.`,true);
+    speak(`Welcome${userName?', '+userName:''}.  Jarvis online. Say Jarvis to activate voice.`,true);
   },800);
 }
+
 </script>
-
-<!-- BOOT SEQUENCE OVERLAY -->
-<div id="boot-overlay" style="position:fixed;inset:0;z-index:801;background:#000;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;font-family:'Orbitron',monospace;display:none">
-  <div id="boot-logo" style="font-size:28px;font-weight:900;letter-spacing:0.5em;color:#00d8ff;text-shadow:0 0 40px #00d8ff;margin-bottom:16px;opacity:0;transition:opacity 1s">J·A·R·V·I·S</div>
-  <div id="boot-lines" style="font-family:'Share Tech Mono',monospace;font-size:10px;letter-spacing:0.15em;color:rgba(0,216,255,0.6);text-align:left;width:440px;display:flex;flex-direction:column;gap:4px;min-height:80px"></div>
-  <div style="width:440px;height:2px;background:rgba(0,216,255,0.1);border-radius:1px;margin-top:16px;overflow:hidden">
-    <div id="boot-bar" style="height:100%;width:0%;background:#00d8ff;transition:width 0.4s ease;box-shadow:0 0 8px #00d8ff"></div>
-  </div>
-  <div id="boot-status" style="font-size:8px;letter-spacing:0.25em;color:rgba(0,216,255,0.35);margin-top:4px">INITIALIZING</div>
-</div>
-
 </body>
 </html>
