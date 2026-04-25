@@ -930,14 +930,31 @@ async function sendAI(msg){
   setCoreState('processing'); SFX.processingStart();
   const sys = `You are Jarvis, Tony Stark's AI. Witty, sophisticated, dry British humour. Natural — NOT robotic. Concise. If you need to search the web, reply only with: SEARCH:<query>. User: ${userName}.`;
   convoHistory.push({role:'user',content:msg});
+
+  // Ollama requires CORS to be enabled when called from a browser.
+  // User must run: OLLAMA_ORIGINS="*" ollama serve
+  // On Windows: set OLLAMA_ORIGINS=* && ollama serve
   try{
     const r = await fetch('http://localhost:11434/api/chat',{
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({model:currentModel, messages:[{role:'system',content:sys},...convoHistory.slice(-8)], stream:false})
+      method:'POST',
+      headers:{
+        'Content-Type':'application/json',
+        'Accept':'application/json',
+      },
+      body: JSON.stringify({
+        model: currentModel,
+        messages:[{role:'system',content:sys},...convoHistory.slice(-8)],
+        stream: false
+      })
     });
-    if(!r.ok) throw new Error('ollama');
+    if(!r.ok){
+      const errText = await r.text().catch(()=>'');
+      throw new Error(`HTTP ${r.status}: ${errText.slice(0,100)}`);
+    }
     const d = await r.json();
     let resp = d.message?.content || '';
+    if(!resp){ throw new Error('Empty response from model'); }
+
     if(resp.startsWith('SEARCH:')){
       const q = resp.replace('SEARCH:','').trim();
       const result = await webSearch(q);
@@ -946,14 +963,80 @@ async function sendAI(msg){
     }
     convoHistory.push({role:'assistant',content:resp});
     if(convoHistory.length>18) convoHistory=convoHistory.slice(-12);
-    SFX.processingEnd(); speak(resp);
+    SFX.processingEnd();
+    speak(resp);
+
   }catch(e){
     SFX.error();
-    speak(`Can't reach Ollama. Run: ollama serve`);
-    notif('OLLAMA OFFLINE → ollama serve && ollama pull llama3');
-    setTimeout(()=>setCoreState('idle'),600);
+    setCoreState('error');
+    const isCors = e.message.includes('Failed to fetch') || e.message.includes('NetworkError') || e.message.includes('CORS') || e.name==='TypeError';
+    if(isCors){
+      speak(`Ollama is offline or CORS isn't enabled. ${userName}, restart Ollama with the origins flag.`);
+      // Show persistent instruction
+      showOllamaHelp();
+    } else {
+      speak(`I encountered an error. ${e.message.slice(0,60)}`);
+      notif('AI ERROR: '+e.message.slice(0,60));
+    }
+    setTimeout(()=>setCoreState('idle'),800);
+    convoHistory.pop(); // remove failed message
   }
 }
+
+// Show Ollama setup instructions on screen
+function showOllamaHelp(){
+  let help = document.getElementById('ollama-help');
+  if(!help){
+    help = document.createElement('div');
+    help.id = 'ollama-help';
+    help.style.cssText = `position:fixed;top:52px;left:50%;transform:translateX(-50%);
+      z-index:100;background:rgba(0,5,15,0.97);border:1px solid rgba(255,102,0,0.4);
+      border-radius:3px;padding:12px 20px;font-family:'Share Tech Mono',monospace;
+      font-size:9px;letter-spacing:0.12em;color:rgba(255,160,60,0.9);
+      max-width:560px;text-align:center;line-height:2;pointer-events:auto`;
+    help.innerHTML = `
+      <div style="color:var(--a);font-family:'Orbitron',monospace;letter-spacing:0.25em;margin-bottom:6px">
+        ⚠ OLLAMA CORS NOT ENABLED
+      </div>
+      <div>Stop Ollama, then restart it with:</div>
+      <div style="color:#00d8ff;margin:6px 0;font-size:10px;background:rgba(0,216,255,0.05);padding:6px;border-radius:2px">
+        Windows CMD: &nbsp;<b>set OLLAMA_ORIGINS=* &amp;&amp; ollama serve</b><br>
+        Mac/Linux: &nbsp;&nbsp;&nbsp;<b>OLLAMA_ORIGINS="*" ollama serve</b>
+      </div>
+      <div style="color:rgba(255,160,0,0.5);font-size:8px">Also make sure your model is pulled: ollama pull llama3</div>
+      <div style="margin-top:8px">
+        <span onclick="document.getElementById('ollama-help').remove()" 
+          style="cursor:pointer;color:rgba(0,216,255,0.5);text-decoration:underline">
+          DISMISS
+        </span>
+        &nbsp;&nbsp;
+        <span onclick="retryOllama()" 
+          style="cursor:pointer;color:var(--g);text-decoration:underline">
+          RETRY CONNECTION
+        </span>
+      </div>
+    `;
+    document.body.appendChild(help);
+  }
+}
+
+async function retryOllama(){
+  notif('RETRYING OLLAMA...');
+  try{
+    const r = await fetch('http://localhost:11434/api/tags',{signal:AbortSignal.timeout(3000)});
+    if(r.ok){
+      const h = document.getElementById('ollama-help');
+      if(h) h.remove();
+      notif('OLLAMA CONNECTED ✓');
+      SFX.confirm();
+      speak('Ollama is now connected.');
+    } else throw new Error('not ok');
+  }catch(e){
+    notif('STILL OFFLINE — check OLLAMA_ORIGINS setting','warn');
+    SFX.error();
+  }
+}
+
 
 
 // ── CAMERA + GESTURE (MediaPipe Hands) ──
@@ -1599,15 +1682,19 @@ function boot(){
   setInterval(updateData,3000); setInterval(updateBattery,15000);
   requestAnimationFrame(frame);
   // Pre-warm Ollama model in background
-  setTimeout(async()=>{
+    setTimeout(async()=>{
     try{
+      await fetch('http://localhost:11434/',{signal:AbortSignal.timeout(2000)});
       await fetch('http://localhost:11434/api/generate',{
         method:'POST',headers:{'Content-Type':'application/json'},
         signal:AbortSignal.timeout(30000),
         body:JSON.stringify({model:currentModel,prompt:'hi',stream:false,options:{num_predict:1}})
       });
-      notif('OLLAMA READY');
-    }catch(e){ notif('OLLAMA OFFLINE → run: ollama serve && ollama pull llama3','warn'); }
+      notif('OLLAMA READY');SFX.confirm();
+    }catch(e){
+      notif('OLLAMA: run with OLLAMA_ORIGINS=* ollama serve','warn');
+      setTimeout(showOllamaHelp,2000);
+    }
   },1500);
   setTimeout(()=>{
     jVoice=findMaleVoice();
