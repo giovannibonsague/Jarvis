@@ -2,6 +2,11 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
+<!-- TensorFlow.js + HandPose — loaded statically for reliability -->
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-core@4.20.0/dist/tf-core.min.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-webgl@4.20.0/dist/tf-backend-webgl.min.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-converter@4.20.0/dist/tf-converter.min.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/hand-pose-detection@2.0.1/dist/hand-pose-detection.min.js" crossorigin="anonymous"></script>
 <title>J.A.R.V.I.S</title>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;600;700;900&family=Share+Tech+Mono&display=swap');
@@ -467,6 +472,25 @@ html,body{width:100%;height:100%;overflow:hidden;background:#000;cursor:none;
   <div id="drag-overlay-sub">STL · OBJ · PLY · FBX</div>
 </div>
 
+
+<!-- BOOT SCREEN -->
+<div id="boot-screen" style="position:fixed;inset:0;z-index:850;background:#000;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px">
+  <div id="boot-logo" style="font-family:'Orbitron',monospace;font-size:clamp(20px,4vw,40px);
+    font-weight:900;letter-spacing:0.5em;color:#00d8ff;
+    text-shadow:0 0 40px #00d8ff,0 0 80px rgba(0,216,255,0.3);
+    opacity:0;transition:opacity 1.2s ease;margin-bottom:20px">J·A·R·V·I·S</div>
+  <div id="boot-lines" style="font-family:'Share Tech Mono',monospace;font-size:10px;
+    letter-spacing:0.18em;color:rgba(0,216,255,0.65);text-align:left;
+    width:min(440px,90vw);display:flex;flex-direction:column;gap:5px;min-height:90px"></div>
+  <div style="width:min(440px,90vw);height:2px;background:rgba(0,216,255,0.1);border-radius:1px;overflow:hidden;margin-top:8px">
+    <div id="boot-bar" style="height:100%;width:0%;background:#00d8ff;
+      transition:width 0.5s ease;box-shadow:0 0 8px #00d8ff"></div>
+  </div>
+  <div id="boot-status" style="font-size:8px;letter-spacing:0.28em;
+    color:rgba(0,216,255,0.32);margin-top:6px;text-transform:uppercase">INITIALIZING</div>
+</div>
+
 <script>
 document.addEventListener('DOMContentLoaded', function() {
 
@@ -570,6 +594,7 @@ const SFX={
   search(){sweep(300,1200,0.25,'sine',0.07);tone(1200,0.15,'sine',0.06,0.25);},
   // MODEL
   model(){sweep(450,950,0.12,'sine',0.08);},
+  bootLine(){tone(600+Math.random()*300,0.04,'sine',0.04);},
 };
 
 // ── VOICE ──
@@ -605,86 +630,140 @@ function showSpoke(text){
 }
 function clearSpoke(){setTimeout(()=>$('spoke').classList.remove('on'),1400);}
 
-// ── WHISPER.CPP STT ──
-const WHISPER_URL='http://localhost:8080/inference';
-let whisperAvailable=false,webSpeechFallback=false;
+// ══════════════════════════════════════════
+//  SPEECH RECOGNITION — Web Speech API
+//  continuous:true so it never gaps
+//  interimResults:true for real-time feedback
+// ══════════════════════════════════════════
+// (recog declared above)
+let interimEl = null; // shows partial transcript live
 
-async function checkWhisper(){
-  try{
-    await fetch('http://localhost:8080/',{method:'GET',signal:AbortSignal.timeout(1500)});
-    whisperAvailable=true;$('mic-lbl').textContent='WHISPER READY';
-    notif('WHISPER.CPP CONNECTED');return true;
-  }catch(e){whisperAvailable=false;return false;}
-}
-
-async function startMic(){
-  micReady=true;
-  const hasWhisper=await checkWhisper();
-  if(hasWhisper) startWhisperLoop();
-  else{webSpeechFallback=true;$('mic-lbl').textContent='WEB SPEECH';notif('Whisper offline → using browser STT');startWebSpeech();}
-}
-
-async function startWhisperLoop(){
-  let stream;
-  try{stream=await navigator.mediaDevices.getUserMedia({audio:{sampleRate:16000,channelCount:1,echoCancellation:true,noiseSuppression:true},video:false});}
-  catch(e){notif('Mic failed: '+e.name,'warn');$('mic-lbl').textContent='MIC DENIED';return;}
-  $('mic-dot').classList.add('on');$('mic-lbl').textContent=wakeActive?'LISTENING':'WAKE WORD';
-
-  async function recordChunk(){
-    return new Promise(res=>{
-      const chunks=[];
-      const mime=MediaRecorder.isTypeSupported('audio/webm;codecs=opus')?'audio/webm;codecs=opus':'audio/webm';
-      const mr=new MediaRecorder(stream,{mimeType:mime});
-      mr.ondataavailable=e=>{if(e.data.size>0)chunks.push(e.data);};
-      mr.onstop=()=>res(new Blob(chunks,{type:mime}));
-      mr.start();setTimeout(()=>mr.stop(),wakeActive?3000:2000);
-    });
+async function startMic() {
+  micReady = true;
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) {
+    $('mic-lbl').textContent = 'NOT SUPPORTED';
+    notif('Speech Recognition not available — use Chrome','warn');
+    return;
   }
-  async function sendToWhisper(blob){
-    const fd=new FormData();fd.append('file',blob,'audio.webm');
-    fd.append('temperature','0.0');fd.append('response_format','json');
-    try{const r=await fetch(WHISPER_URL,{method:'POST',body:fd,signal:AbortSignal.timeout(8000)});const d=await r.json();return(d.text||'').trim();}
-    catch(e){return'';}
-  }
-  async function loop(){
-    if(!micReady)return;
-    if(wakeActive){listening=true;$('mpulse').classList.add('on');$('mic-lbl').textContent='RECORDING...';setCoreState('listening');}
-    else $('mic-lbl').textContent='SCANNING...';
-    const blob=await recordChunk();
-    if(wakeActive)$('mpulse').classList.remove('on');
-    $('mic-lbl').textContent='PROCESSING...';
-    const text=await sendToWhisper(blob);
-    listening=false;
-    if(text&&text.length>1){
-      const raw=text.toLowerCase().trim();
-      if(!/^(thank you|thanks|you|the|\.|\[.*\]|♪|music|bye)$/i.test(raw.replace(/[.,!?]/g,''))){
-        notif(text.toUpperCase());
-        if(!wakeActive){if(raw.includes('jarvis')){activateWake();const after=raw.replace(/.*?jarvis\.?\s*/,'').trim();if(after.length>2)handleCmd(after);}}
-        else{handleCmd(text);resetWakeTimer();}
+
+  recog = new SR();
+  recog.lang = 'en-US';
+  recog.continuous = true;       // never stop between sentences
+  recog.interimResults = true;   // show partial results live
+  recog.maxAlternatives = 3;     // get multiple interpretations
+
+  recog.onstart = () => {
+    listening = true;
+    $('mic-dot').classList.add('on');
+    $('mic-lbl').textContent = wakeActive ? 'LISTENING' : 'WAKE WORD';
+    $('mpulse').classList.add('on');
+    if (wakeActive) setCoreState('listening');
+  };
+
+  recog.onresult = (e) => {
+    let interim = '';
+    let final = '';
+
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      const transcript = e.results[i][0].transcript;
+      if (e.results[i].isFinal) {
+        final += transcript;
+      } else {
+        interim += transcript;
       }
     }
-    if(!speaking)$('mic-lbl').textContent=wakeActive?'LISTENING':'WAKE WORD';
-    setTimeout(loop,speaking?2500:80);
-  }
-  loop();
+
+    // Show interim results live on screen (like a subtitle)
+    if (interim) {
+      showInterim(interim);
+    }
+
+    if (final) {
+      hideInterim();
+      const raw = final.trim().toLowerCase();
+      const full = final.trim();
+
+      // Always show what was heard
+      notif(full.toUpperCase());
+
+      if (!wakeActive) {
+        // Listening for wake word
+        if (raw.includes('jarvis') || raw.includes('travis') || raw.includes('harvest')) {
+          activateWake();
+          // If there's content after the wake word, process it
+          const after = raw
+            .replace(/.*?(jarvis|travis|harvest)\s*/i, '')
+            .trim();
+          if (after.length > 2) handleCmd(after);
+        }
+      } else {
+        // Wake active — process everything
+        handleCmd(full);
+        resetWakeTimer();
+      }
+    }
+  };
+
+  recog.onerror = (e) => {
+    if (e.error === 'not-allowed') {
+      $('mic-lbl').textContent = 'MIC DENIED';
+      micReady = false;
+      return;
+    }
+    if (e.error === 'no-speech') {
+      // Normal — just no speech detected, will restart
+      return;
+    }
+    console.warn('SR error:', e.error);
+  };
+
+  recog.onend = () => {
+    listening = false;
+    $('mic-dot').classList.remove('on');
+    $('mpulse').classList.remove('on');
+    $('mic-lbl').textContent = micReady ? (wakeActive ? 'LISTENING' : 'WAKE WORD') : 'MIC OFF';
+    hideInterim();
+
+    // Always restart — continuous listening
+    // Small delay if we were speaking so we don't pick up Jarvis's voice
+    if (micReady) {
+      const delay = speaking ? 1800 : 150;
+      setTimeout(() => {
+        if (micReady && recog) {
+          try { recog.start(); } catch(e) { /* already started */ }
+        }
+      }, delay);
+    }
+  };
+
+  try { recog.start(); } catch(e) {}
+  $('mic-lbl').textContent = 'WAKE WORD';
 }
 
-function startWebSpeech(){
-  const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
-  if(!SR){$('mic-lbl').textContent='NOT SUPPORTED';return;}
-  recog=new SR();recog.continuous=false;recog.interimResults=false;recog.lang='en-US';
-  recog.onstart=()=>{listening=true;$('mic-dot').classList.add('on');$('mpulse').classList.add('on');if(wakeActive)setCoreState('listening');$('mic-lbl').textContent=wakeActive?'LISTENING':'WAKE WORD';};
-  recog.onresult=e=>{
-    const raw=e.results[0][0].transcript.trim().toLowerCase(),full=e.results[0][0].transcript.trim();
-    notif(full.toUpperCase());
-    if(!wakeActive){if(raw.includes('jarvis')){activateWake();const after=raw.replace(/.*?jarvis\s*/,'').trim();if(after.length>2)handleCmd(after);}}
-    else{handleCmd(full);resetWakeTimer();}
-  };
-  recog.onend=()=>{listening=false;$('mic-dot').classList.remove('on');$('mpulse').classList.remove('on');$('mic-lbl').textContent=micReady?(wakeActive?'ACTIVE':'WAKE WORD'):'MIC';if(!speaking&&!wakeActive)setCoreState('idle');setTimeout(()=>{if(recog&&micReady)try{recog.start();}catch(e){}},speaking?2000:300);};
-  recog.onerror=e=>{listening=false;$('mic-dot').classList.remove('on');$('mpulse').classList.remove('on');if(e.error==='not-allowed'){$('mic-lbl').textContent='MIC DENIED';micReady=false;return;}if(e.error!=='aborted')setTimeout(()=>{if(recog)try{recog.start();}catch(ex){}},800);};
-  try{recog.start();}catch(e){}
-  $('mic-lbl').textContent='WAKE WORD';
+// Interim transcript display
+function showInterim(text) {
+  if (!interimEl) {
+    interimEl = document.createElement('div');
+    interimEl.style.cssText = `position:fixed;bottom:110px;left:50%;transform:translateX(-50%);
+      font-family:'Share Tech Mono',monospace;font-size:10px;letter-spacing:0.12em;
+      color:rgba(0,216,255,0.45);pointer-events:none;z-index:25;
+      background:rgba(0,5,15,0.6);padding:3px 12px;border-radius:2px;
+      border-left:2px solid rgba(0,216,255,0.3);white-space:nowrap;
+      max-width:70vw;overflow:hidden;text-overflow:ellipsis;`;
+    document.body.appendChild(interimEl);
+  }
+  interimEl.textContent = text.toUpperCase();
+  interimEl.style.opacity = '1';
 }
+
+function hideInterim() {
+  if (interimEl) {
+    interimEl.style.opacity = '0';
+    interimEl.textContent = '';
+  }
+}
+
 
 // ── WAKE WORD ──
 function activateWake(){
@@ -1041,7 +1120,27 @@ async function sendAI(msg) {
     return;
   }
 
-  const sys = `You are Jarvis, Tony Stark's AI assistant. Witty, sophisticated, dry British humour. Speak naturally — NOT robotic. Keep responses concise. If you need to search the web for current info, reply ONLY with: SEARCH:<your query>. User's name: ${userName}.`;
+  // Build system prompt with all real stats + user info
+  const mem = performance.memory;
+  const conn = navigator.connection || {};
+  const bat = await navigator.getBattery?.().catch(()=>null);
+  const sysInfo = [
+    `User: ${userName}`,
+    `Time: ${new Date().toLocaleString()}`,
+    `OS: ${navigator.userAgent.includes('Windows')?'Windows':navigator.userAgent.includes('Mac')?'macOS':'Linux'}`,
+    `CPU cores: ${navigator.hardwareConcurrency||'?'}`,
+    `RAM: ${navigator.deviceMemory||'?'}GB device RAM`,
+    mem ? `JS heap: ${(mem.usedJSHeapSize/1048576).toFixed(0)}MB / ${(mem.jsHeapSizeLimit/1048576).toFixed(0)}MB` : '',
+    `Screen: ${screen.width}×${screen.height}`,
+    `Network: ${conn.effectiveType||'?'} RTT:${conn.rtt||'?'}ms`,
+    bat ? `Battery: ${Math.round(bat.level*100)}% ${bat.charging?'charging':'on battery'}` : '',
+    `FPS: ${fps}`,
+    `Camera: ${camReady?'active':'offline'}`,
+    `Mic: ${micReady?'active':'offline'}`,
+    `Weather: ${$('wtemp')?.textContent||'?'} ${$('wcond')?.textContent||''} in ${$('wcity')?.textContent||'?'}`,
+    `Location: ${$('wcity')?.textContent||'unknown'}`,
+  ].filter(Boolean).join(', ');
+  const sys = `You are Jarvis, Tony Stark's AI assistant. Witty, sophisticated, dry British humour. Speak naturally — NOT robotic. Keep responses concise. You have access to the user's system data: [${sysInfo}]. Use this when relevant. If you need current web info, reply ONLY: SEARCH:<query>. User's name: ${userName}.`;
 
   try {
     const reply = await webllmEngine.chat.completions.create({
@@ -1108,6 +1207,69 @@ const CONNECTIONS = [
   [0,17],[17,18],[18,19],[19,20],  // pinky
   [5,9],[9,13],[13,17],            // palm knuckles
 ];
+
+async function loadHandModel() {
+  if(handModel || handModelLoading) return;
+  handModelLoading = true;
+  try {
+    // TF.js + HandPose — loads from CDN
+    handModel = await window.handPoseDetection.createDetector(
+      window.handPoseDetection.SupportedModels.MediaPipeHands,
+      {
+        runtime: 'tfjs',
+        modelType: 'lite',
+        maxHands: 1,
+      }
+    );
+    $('cam-lbl').textContent = 'CAM + HANDS';
+    $('rd-gest').textContent = 'TFJS HANDS';
+    $('rd-gest').style.color = 'var(--g)';
+    notif('HAND TRACKING LOADED');
+    SFX.confirm();
+    handModelLoading = false;
+  } catch(e) {
+    handModelLoading = false;
+    $('rd-gest').textContent = 'MODEL FAILED';
+    notif('Hand model failed: '+e.message.slice(0,40));
+    console.error('HandPose load error:', e);
+  }
+}
+
+function startCam(stream) {
+  $('cam-feed').srcObject = stream;
+  $('cam-feed').classList.add('on');
+  const camOv = $('cam-ov');
+  if(camOv){ camOv.classList.add('on'); camOv.width=130; camOv.height=98; }
+  // TF.js already loaded from <head> scripts
+  // Small delay to ensure scripts initialised
+  setTimeout(() => {
+    if(typeof window.handPoseDetection !== 'undefined') {
+      camReady = true;
+      $('cam-dot').classList.add('on');
+      $('cam-lbl').textContent = 'INITIALIZING...';
+      loadHandModel().then(() => startHandLoop());
+    } else {
+      // Scripts not loaded yet — wait
+      const check = setInterval(() => {
+        if(typeof window.handPoseDetection !== 'undefined') {
+          clearInterval(check);
+          camReady = true;
+          $('cam-dot').classList.add('on');
+          loadHandModel().then(() => startHandLoop());
+        }
+      }, 300);
+      setTimeout(() => {
+        clearInterval(check);
+        if(!camReady) {
+          camReady = true;
+          $('cam-dot').classList.add('on');
+          $('cam-lbl').textContent = 'CAM (no ML)';
+          notif('HandPose unavailable — check internet','warn');
+        }
+      }, 8000);
+    }
+  }, 500);
+}
 
 async function loadHandModel() {
   if(handModel || handModelLoading) return;
@@ -1258,7 +1420,11 @@ function processHandResult(hands) {
   const wrist = kp[LM.WRIST];
 
   // Finger extended: tip is higher than MCP (smaller y = higher on screen)
-  const fingerUp = (tip, mcp) => tip.y < mcp.y - 20;
+  // Finger extended: tip is above MCP by at least 15% of hand height
+  // Using relative threshold prevents lighting/distance issues
+  const handH = Math.abs(wrist.y - idxMcp.y) || 40;
+  const threshold = Math.max(15, handH * 0.25);
+  const fingerUp = (tip, mcp) => tip.y < mcp.y - threshold;
   const idxUp  = fingerUp(idxTipImg, idxMcp);
   const midUp  = fingerUp(midTipImg, midMcp);
   const rngUp  = fingerUp(rngTipImg, rngMcp);
@@ -1270,7 +1436,7 @@ function processHandResult(hands) {
   const pinchDist = Math.hypot(thmTipImg.x - idxTipImg.x, thmTipImg.y - idxTipImg.y);
   const handSize = Math.hypot(wrist.x - idxMcp.x, wrist.y - idxMcp.y); // normalize to hand size
   const pinchRatio = pinchDist / Math.max(handSize, 1);
-  const isPinch = pinchRatio < 0.35;
+  const isPinch = pinchRatio < 0.42; // more forgiving threshold
 
   const isOpenPalm = fingersUpCount >= 3 && !isPinch;
   const isPoint    = idxUp && !midUp && !rngUp && !pkyUp;
@@ -1776,13 +1942,67 @@ function boot(){
   updateData(); updateBattery(); fetchWeather();
   setInterval(updateData,3000); setInterval(updateBattery,15000);
   requestAnimationFrame(frame);
-  // Start loading WebLLM model into browser (downloads once, then cached)
-  setTimeout(()=>{ initWebLLM(currentModel); }, 1200);
-  setTimeout(()=>{
-    jVoice=findMaleVoice();
-    speak(`Welcome${userName?', '+userName:''}. Jarvis online. Loading AI model now.`,true);
-  },800);
+
+  // Run boot screen animation
+  runBootScreen(() => {
+    // After boot screen, start AI loading
+    setTimeout(()=>{ initWebLLM(currentModel); }, 400);
+    setTimeout(()=>{
+      jVoice=findMaleVoice();
+      speak(`Welcome${userName?', '+userName:''}. Jarvis online. Loading AI model now.`,true);
+    },600);
+  });
 }
+
+const BOOT_MSGS = [
+  'SPATIAL INTERFACE ENGINE ONLINE',
+  'GESTURE RECOGNITION PIPELINE ACTIVE',
+  'SPEECH SYNTHESIS LOADED',
+  'WEATHER TELEMETRY CONNECTED',
+  'DISPLAY SUBSYSTEM CALIBRATED',
+  'NEURAL PATHWAYS INITIALIZED',
+  'LOADING LANGUAGE MODEL...',
+  'ALL SYSTEMS NOMINAL',
+];
+
+function runBootScreen(onDone){
+  const screen = $('boot-screen');
+  const logo   = $('boot-logo');
+  const lines  = $('boot-lines');
+  const bar    = $('boot-bar');
+  const status = $('boot-status');
+  if(!screen){ onDone(); return; }
+
+  screen.style.display='flex';
+  setTimeout(()=>{ logo.style.opacity='1'; }, 100);
+
+  let i = 0;
+  function addLine(){
+    if(i >= BOOT_MSGS.length){ finish(); return; }
+    SFX.bootLine();
+    const el = document.createElement('div');
+    el.style.cssText='opacity:0;transition:opacity 0.25s;color:rgba(0,216,255,0.7);font-size:9px;letter-spacing:0.18em';
+    el.textContent = '> ' + BOOT_MSGS[i];
+    lines.appendChild(el);
+    setTimeout(()=>el.style.opacity='1', 50);
+    while(lines.children.length > 6) lines.removeChild(lines.firstChild);
+    bar.style.width = ((i+1)/BOOT_MSGS.length*100)+'%';
+    status.textContent = BOOT_MSGS[i];
+    i++;
+    setTimeout(addLine, 220 + Math.random()*120);
+  }
+  addLine();
+
+  function finish(){
+    bar.style.width='100%'; status.textContent='READY';
+    setTimeout(()=>{
+      screen.style.transition='opacity 0.8s';
+      screen.style.opacity='0';
+      setTimeout(()=>{ screen.style.display='none'; onDone(); }, 900);
+    }, 400);
+  }
+}
+
 
 
 }); // end DOMContentLoaded
