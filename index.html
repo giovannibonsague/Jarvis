@@ -395,11 +395,11 @@ html,body{width:100%;height:100%;overflow:hidden;background:#000;cursor:none;
   </div>
 
   <div id="mrow">
-    <button class="mb on" data-m="llama3" data-p="ollama">LLAMA3</button>
-    <button class="mb" data-m="mistral" data-p="ollama">MISTRAL</button>
-    <button class="mb" data-m="phi3" data-p="ollama">PHI-3</button>
-    <button class="mb" data-m="llama3.2" data-p="ollama">LLAMA3.2</button>
-    <button class="mb" data-m="gemma3" data-p="ollama">GEMMA3</button>
+    <button class="mb on" data-m="Llama-3.2-1B-Instruct-q4f32_1-MLC" data-p="webllm">LLAMA 1B ⚡</button>
+    <button class="mb" data-m="Llama-3.2-3B-Instruct-q4f32_1-MLC" data-p="webllm">LLAMA 3B</button>
+    <button class="mb" data-m="Phi-3.5-mini-instruct-q4f16_1-MLC" data-p="webllm">PHI 3.5</button>
+    <button class="mb" data-m="gemma-2-2b-it-q4f32_1-MLC" data-p="webllm">GEMMA 2B</button>
+    <button class="mb" data-m="Mistral-7B-Instruct-v0.3-q4f16_1-MLC" data-p="webllm">MISTRAL 7B</button>
   </div>
 <div id="bot">
     <div class="bi">BATTERY&nbsp;
@@ -926,340 +926,420 @@ function handleCmd(raw){
 // ══════════════════════════════════════════
 //  LOCAL AI (Ollama)
 // ══════════════════════════════════════════
-async function sendAI(msg){
-  setCoreState('processing'); SFX.processingStart();
-  const sys = `You are Jarvis, Tony Stark's AI. Witty, sophisticated, dry British humour. Natural — NOT robotic. Concise. If you need to search the web, reply only with: SEARCH:<query>. User: ${userName}.`;
-  convoHistory.push({role:'user',content:msg});
+// ══════════════════════════════════════════
+//  WEBLLM — runs LLM entirely in browser
+//  No server, no API key, no account
+//  Uses WebGPU. Downloads model once, cached.
+// ══════════════════════════════════════════
+let webllmEngine = null;
+let webllmLoading = false;
+let webllmReady = false;
 
-  // Ollama requires CORS to be enabled when called from a browser.
-  // User must run: OLLAMA_ORIGINS="*" ollama serve
-  // On Windows: set OLLAMA_ORIGINS=* && ollama serve
-  try{
-    const r = await fetch('http://localhost:11434/api/chat',{
-      method:'POST',
-      headers:{
-        'Content-Type':'application/json',
-        'Accept':'application/json',
-      },
-      body: JSON.stringify({
-        model: currentModel,
-        messages:[{role:'system',content:sys},...convoHistory.slice(-8)],
-        stream: false
-      })
+// WebLLM CDN
+const WEBLLM_CDN = 'https://esm.run/@mlc-ai/web-llm';
+
+// Load WebLLM as ES module
+async function initWebLLM(modelId) {
+  if(webllmLoading) return;
+  webllmLoading = true;
+  webllmReady = false;
+
+  showModelLoadProgress(`LOADING ${modelId.split('-').slice(0,3).join(' ')}...`, 0);
+  notif('LOADING AI MODEL INTO BROWSER...');
+  setCoreState('processing');
+
+  try {
+    const { CreateMLCEngine } = await import(WEBLLM_CDN);
+
+    webllmEngine = await CreateMLCEngine(modelId, {
+      initProgressCallback: (progress) => {
+        const pct = Math.round((progress.progress || 0) * 100);
+        const text = progress.text || '';
+        showModelLoadProgress(text.slice(0, 60) || `LOADING ${pct}%`, pct);
+      }
     });
-    if(!r.ok){
-      const errText = await r.text().catch(()=>'');
-      throw new Error(`HTTP ${r.status}: ${errText.slice(0,100)}`);
-    }
-    const d = await r.json();
-    let resp = d.message?.content || '';
-    if(!resp){ throw new Error('Empty response from model'); }
 
-    if(resp.startsWith('SEARCH:')){
+    webllmReady = true;
+    webllmLoading = false;
+    hideModelLoadProgress();
+    notif('AI ONLINE — ' + modelId.split('-').slice(0,3).join(' ').toUpperCase());
+    setCoreState('idle');
+    SFX.confirm();
+    if($('mlbl')) $('mlbl').textContent = modelId.split('-')[0].toUpperCase();
+    speak(`AI model loaded. I'm ready, ${userName}.`);
+  } catch(e) {
+    webllmLoading = false;
+    hideModelLoadProgress();
+    notif('WebLLM failed: ' + e.message.slice(0,50), 'warn');
+    setCoreState('idle');
+    console.error('WebLLM error:', e);
+    // If WebGPU not supported
+    if(e.message.includes('WebGPU') || e.message.includes('webgpu')) {
+      speak('WebGPU is not available in this browser. Try Chrome 113 or newer.');
+      showWebGPUWarning();
+    }
+  }
+}
+
+function showWebGPUWarning() {
+  let w = document.getElementById('webgpu-warn');
+  if(!w) {
+    w = document.createElement('div');
+    w.id = 'webgpu-warn';
+    w.style.cssText = `position:fixed;top:52px;left:50%;transform:translateX(-50%);
+      z-index:100;background:rgba(0,5,15,0.97);border:1px solid rgba(255,102,0,0.5);
+      border-radius:3px;padding:12px 20px;font-family:'Share Tech Mono',monospace;
+      font-size:9px;letter-spacing:0.12em;color:rgba(255,160,60,0.9);
+      max-width:500px;text-align:center;line-height:2;`;
+    w.innerHTML = `<div style="color:var(--a);font-family:'Orbitron',monospace;letter-spacing:0.25em;margin-bottom:6px">⚠ WEBGPU REQUIRED</div>
+      <div>AI runs locally via WebGPU. Use Chrome 113+ or Edge 113+.</div>
+      <div style="color:rgba(0,216,255,0.4);font-size:8px;margin-top:4px">Make sure hardware acceleration is enabled in browser settings.</div>
+      <div style="margin-top:8px"><span onclick="this.closest('div').remove()" style="cursor:pointer;color:rgba(0,216,255,0.5);text-decoration:underline">DISMISS</span></div>`;
+    document.body.appendChild(w);
+  }
+}
+
+// Model load progress overlay
+function showModelLoadProgress(text, pct) {
+  let el = document.getElementById('model-load-overlay');
+  if(!el) {
+    el = document.createElement('div');
+    el.id = 'model-load-overlay';
+    el.style.cssText = `position:fixed;bottom:58px;left:50%;transform:translateX(-50%);
+      z-index:50;background:rgba(0,5,15,0.95);border:1px solid rgba(0,216,255,0.2);
+      border-radius:3px;padding:10px 20px;min-width:380px;pointer-events:none;
+      font-family:'Share Tech Mono',monospace;`;
+    el.innerHTML = `
+      <div id="mlo-text" style="font-size:9px;letter-spacing:0.15em;color:rgba(0,216,255,0.7);margin-bottom:6px;text-transform:uppercase"></div>
+      <div style="width:100%;height:2px;background:rgba(0,216,255,0.1);border-radius:1px;overflow:hidden">
+        <div id="mlo-bar" style="height:100%;background:#00d8ff;width:0%;transition:width 0.3s;box-shadow:0 0 6px #00d8ff"></div>
+      </div>
+      <div id="mlo-note" style="font-size:7px;letter-spacing:0.15em;color:rgba(0,216,255,0.3);margin-top:4px">FIRST LOAD DOWNLOADS MODEL — CACHED AFTER</div>
+    `;
+    document.body.appendChild(el);
+  }
+  const t = document.getElementById('mlo-text');
+  const b = document.getElementById('mlo-bar');
+  if(t) t.textContent = text;
+  if(b) b.style.width = pct + '%';
+}
+
+function hideModelLoadProgress() {
+  const el = document.getElementById('model-load-overlay');
+  if(el) { el.style.opacity='0'; el.style.transition='opacity 0.5s'; setTimeout(()=>el.remove(), 600); }
+}
+
+async function sendAI(msg) {
+  setCoreState('processing'); SFX.processingStart();
+  convoHistory.push({role:'user', content:msg});
+
+  if(!webllmReady) {
+    SFX.error();
+    speak(`The AI model is still loading. Please wait a moment.`);
+    setCoreState('idle');
+    convoHistory.pop();
+    return;
+  }
+
+  const sys = `You are Jarvis, Tony Stark's AI assistant. Witty, sophisticated, dry British humour. Speak naturally — NOT robotic. Keep responses concise. If you need to search the web for current info, reply ONLY with: SEARCH:<your query>. User's name: ${userName}.`;
+
+  try {
+    const reply = await webllmEngine.chat.completions.create({
+      messages: [
+        {role:'system', content:sys},
+        ...convoHistory.slice(-8)
+      ],
+      temperature: 0.8,
+      max_tokens: 250,
+      stream: false,
+    });
+
+    let resp = reply.choices[0].message.content || '';
+    resp = resp.trim();
+
+    if(resp.startsWith('SEARCH:')) {
       const q = resp.replace('SEARCH:','').trim();
       const result = await webSearch(q);
-      if(result) convoHistory.push({role:'assistant',content:result});
+      if(result) convoHistory.push({role:'assistant', content:result});
       SFX.processingEnd(); setCoreState('idle'); return;
     }
-    convoHistory.push({role:'assistant',content:resp});
-    if(convoHistory.length>18) convoHistory=convoHistory.slice(-12);
+
+    convoHistory.push({role:'assistant', content:resp});
+    if(convoHistory.length > 18) convoHistory = convoHistory.slice(-12);
     SFX.processingEnd();
     speak(resp);
 
-  }catch(e){
+  } catch(e) {
     SFX.error();
-    setCoreState('error');
-    const isCors = e.message.includes('Failed to fetch') || e.message.includes('NetworkError') || e.message.includes('CORS') || e.name==='TypeError';
-    if(isCors){
-      speak(`Ollama is offline or CORS isn't enabled. ${userName}, restart Ollama with the origins flag.`);
-      // Show persistent instruction
-      showOllamaHelp();
-    } else {
-      speak(`I encountered an error. ${e.message.slice(0,60)}`);
-      notif('AI ERROR: '+e.message.slice(0,60));
-    }
-    setTimeout(()=>setCoreState('idle'),800);
-    convoHistory.pop(); // remove failed message
+    speak(`I encountered an error. ${e.message.slice(0,60)}`);
+    convoHistory.pop();
+    setTimeout(()=>setCoreState('idle'), 600);
+    console.error('WebLLM inference error:', e);
   }
 }
 
-// Show Ollama setup instructions on screen
-function showOllamaHelp(){
-  let help = document.getElementById('ollama-help');
-  if(!help){
-    help = document.createElement('div');
-    help.id = 'ollama-help';
-    help.style.cssText = `position:fixed;top:52px;left:50%;transform:translateX(-50%);
-      z-index:100;background:rgba(0,5,15,0.97);border:1px solid rgba(255,102,0,0.4);
-      border-radius:3px;padding:12px 20px;font-family:'Share Tech Mono',monospace;
-      font-size:9px;letter-spacing:0.12em;color:rgba(255,160,60,0.9);
-      max-width:560px;text-align:center;line-height:2;pointer-events:auto`;
-    help.innerHTML = `
-      <div style="color:var(--a);font-family:'Orbitron',monospace;letter-spacing:0.25em;margin-bottom:6px">
-        ⚠ OLLAMA CORS NOT ENABLED
-      </div>
-      <div>Stop Ollama, then restart it with:</div>
-      <div style="color:#00d8ff;margin:6px 0;font-size:10px;background:rgba(0,216,255,0.05);padding:6px;border-radius:2px">
-        Windows CMD: &nbsp;<b>set OLLAMA_ORIGINS=* &amp;&amp; ollama serve</b><br>
-        Mac/Linux: &nbsp;&nbsp;&nbsp;<b>OLLAMA_ORIGINS="*" ollama serve</b>
-      </div>
-      <div style="color:rgba(255,160,0,0.5);font-size:8px">Also make sure your model is pulled: ollama pull llama3</div>
-      <div style="margin-top:8px">
-        <span onclick="document.getElementById('ollama-help').remove()" 
-          style="cursor:pointer;color:rgba(0,216,255,0.5);text-decoration:underline">
-          DISMISS
-        </span>
-        &nbsp;&nbsp;
-        <span onclick="retryOllama()" 
-          style="cursor:pointer;color:var(--g);text-decoration:underline">
-          RETRY CONNECTION
-        </span>
-      </div>
-    `;
-    document.body.appendChild(help);
-  }
-}
+// ══════════════════════════════════════════
+//  HAND TRACKING — TensorFlow.js + HandPose
+//  Reliable CDN, real 21 landmarks, works in browsers
+// ══════════════════════════════════════════
+let handModel = null, handModelLoading = false;
+// (declared above)
+let prevGest = 'none', gestCD = 0, handConf = 0, handStr = 'NO HAND';
+let handCanvas = document.createElement('canvas');
+let handCtx = handCanvas.getContext('2d');
+let handLoop = null;
 
-async function retryOllama(){
-  notif('RETRYING OLLAMA...');
-  try{
-    const r = await fetch('http://localhost:11434/api/tags',{signal:AbortSignal.timeout(3000)});
-    if(r.ok){
-      const h = document.getElementById('ollama-help');
-      if(h) h.remove();
-      notif('OLLAMA CONNECTED ✓');
-      SFX.confirm();
-      speak('Ollama is now connected.');
-    } else throw new Error('not ok');
-  }catch(e){
-    notif('STILL OFFLINE — check OLLAMA_ORIGINS setting','warn');
-    SFX.error();
-  }
-}
-
-
-
-// ── CAMERA + GESTURE (MediaPipe Hands) ──
-// Uses MediaPipe Hands for real 21-landmark tracking
-// Loaded from CDN — no install needed
-let hands = null, mpCamera = null;
-// (vars declared in state section above)
-
-// MediaPipe landmark indices
-const MP = {
-  WRIST:0, THUMB_TIP:4, INDEX_TIP:8, MIDDLE_TIP:12, RING_TIP:16, PINKY_TIP:20,
-  INDEX_MCP:5, INDEX_PIP:6, INDEX_DIP:7,
-  MIDDLE_MCP:9, RING_MCP:13, PINKY_MCP:17,
+// Landmark indices (same as MediaPipe)
+const LM = {
+  WRIST:0,
+  THUMB_CMC:1, THUMB_MCP:2, THUMB_IP:3, THUMB_TIP:4,
+  INDEX_MCP:5, INDEX_PIP:6, INDEX_DIP:7, INDEX_TIP:8,
+  MIDDLE_MCP:9, MIDDLE_PIP:10, MIDDLE_DIP:11, MIDDLE_TIP:12,
+  RING_MCP:13, RING_PIP:14, RING_DIP:15, RING_TIP:16,
+  PINKY_MCP:17, PINKY_PIP:18, PINKY_DIP:19, PINKY_TIP:20,
 };
 
+// Skeleton connections for drawing
+const CONNECTIONS = [
+  [0,1],[1,2],[2,3],[3,4],         // thumb
+  [0,5],[5,6],[6,7],[7,8],         // index
+  [0,9],[9,10],[10,11],[11,12],    // middle
+  [0,13],[13,14],[14,15],[15,16],  // ring
+  [0,17],[17,18],[18,19],[19,20],  // pinky
+  [5,9],[9,13],[13,17],            // palm knuckles
+];
+
+async function loadHandModel() {
+  if(handModel || handModelLoading) return;
+  handModelLoading = true;
+  try {
+    // TF.js + HandPose — loads from CDN
+    handModel = await window.handPoseDetection.createDetector(
+      window.handPoseDetection.SupportedModels.MediaPipeHands,
+      {
+        runtime: 'tfjs',
+        modelType: 'lite',
+        maxHands: 1,
+      }
+    );
+    $('cam-lbl').textContent = 'CAM + HANDS';
+    $('rd-gest').textContent = 'TFJS HANDS';
+    $('rd-gest').style.color = 'var(--g)';
+    notif('HAND TRACKING LOADED');
+    SFX.confirm();
+    handModelLoading = false;
+  } catch(e) {
+    handModelLoading = false;
+    $('rd-gest').textContent = 'MODEL FAILED';
+    notif('Hand model failed: '+e.message.slice(0,40));
+    console.error('HandPose load error:', e);
+  }
+}
+
 function startCam(stream) {
-  // Show the cam feed
   $('cam-feed').srcObject = stream;
   $('cam-feed').classList.add('on');
   const camOv = $('cam-ov');
   if(camOv){ camOv.classList.add('on'); camOv.width=130; camOv.height=98; }
 
-  // Load MediaPipe Hands
-  const script1 = document.createElement('script');
-  script1.src = 'https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js';
-  const script2 = document.createElement('script');
-  script2.src = 'https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js';
-  const script3 = document.createElement('script');
-  script3.src = 'https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js';
-
-  script3.onload = () => {
-    initMediaPipe(stream);
-  };
-
-  document.head.appendChild(script1);
-  document.head.appendChild(script2);
-  document.head.appendChild(script3);
-}
-
-function initMediaPipe(stream) {
-  hands = new Hands({locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}`});
-  hands.setOptions({
-    maxNumHands: 1,
-    modelComplexity: 1,
-    minDetectionConfidence: 0.7,
-    minTrackingConfidence: 0.6,
-  });
-
-  hands.onResults(onHandResults);
-
-  const vid = $('cam-feed');
-  mpCamera = new Camera(vid, {
-    onFrame: async () => { await hands.send({image: vid}); },
-    width: 320, height: 240,
-  });
-  mpCamera.start().then(() => {
-    camReady = true;
-    $('cam-dot').classList.add('on');
-    $('cam-lbl').textContent = 'CAM ONLINE';
-    $('rd-gest').textContent = 'MEDIAPIPE';
-    $('rd-gest').style.color = 'var(--g)';
-    notif('MEDIAPIPE HANDS ACTIVE');
-    SFX.confirm();
-  }).catch(e => {
-    // Fallback: use stream directly without Camera util
-    const vid2 = $('vid-hidden');
-    vid2.srcObject = stream;
-    vid2.onloadeddata = () => {
-      camReady = true;
-      $('cam-dot').classList.add('on');
-      $('cam-lbl').textContent = 'CAM ONLINE';
-      notif('CAM ONLINE (direct mode)');
-      // Process at 15fps
-      setInterval(async () => {
-        if (hands) await hands.send({image: vid2});
-      }, 66);
-    };
-  });
-}
-
-function onHandResults(results) {
-  const ov = $('cam-ov');
-  const ovCtx = ov.getContext('2d');
-  ov.width = 130; ov.height = 98;
-  // Always clear first — blank canvas when no hand
-  ov.width = 130; ov.height = 98; // reassigning width clears canvas
-  ovCtx.clearRect(0, 0, 130, 98);
-
-  if (!results.multiHandLandmarks || results.multiHandLandmarks.length === 0) {
-    handDetected = false;
-    handStr = 'NO HAND';
-    handConf = 0;
-    handLandmarks = [];
-    if($('rd-hand')) $('rd-hand').textContent = '--';
-    if($('br-gest')) $('br-gest').textContent = 'NO HAND';
-    if($('br-conf')) $('br-conf').textContent = '0%';
-    // Draw "no hand" indicator subtly
-    ovCtx.fillStyle = 'rgba(255,34,68,0.3)';
-    ovCtx.font = '7px monospace';
-    ovCtx.fillText('NO HAND', 4, 88);
-    return; // NOTHING ELSE DRAWN
+  // Load TF.js + Hand detection scripts sequentially
+  function loadScript(src, cb) {
+    if(document.querySelector(`script[src="${src}"]`)) { cb(); return; }
+    const s = document.createElement('script');
+    s.src = src;
+    s.crossOrigin = 'anonymous';
+    s.onload = cb;
+    s.onerror = () => { console.warn('Script failed:', src); cb(); };
+    document.head.appendChild(s);
   }
 
+  const tfcdn = 'https://cdn.jsdelivr.net/npm/@tensorflow';
+  const mpcdn = 'https://cdn.jsdelivr.net/npm/@mediapipe/hands';
+
+  loadScript(tfcdn+'/tfjs-core@4.20.0/dist/tf-core.min.js', () =>
+    loadScript(tfcdn+'/tfjs-backend-webgl@4.20.0/dist/tf-backend-webgl.min.js', () =>
+      loadScript(tfcdn+'/tfjs-converter@4.20.0/dist/tf-converter.min.js', () =>
+        loadScript('https://cdn.jsdelivr.net/npm/@tensorflow-models/hand-pose-detection@2.0.1/dist/hand-pose-detection.min.js', () => {
+          if(typeof window.handPoseDetection !== 'undefined') {
+            camReady = true;
+            $('cam-dot').classList.add('on');
+            loadHandModel().then(() => startHandLoop());
+          } else {
+            notif('TF.js unavailable — check connection','warn');
+            camReady = true;
+            $('cam-dot').classList.add('on');
+            $('cam-lbl').textContent = 'CAM (no ML)';
+          }
+        })
+      )
+    )
+  );
+}
+
+function startHandLoop() {
+  const vid = $('cam-feed');
+  let lastFrame = 0;
+
+  async function detect() {
+    if (!handModel || !vid.videoWidth) {
+      handLoop = requestAnimationFrame(detect);
+      return;
+    }
+
+    const now = performance.now();
+    // Run at ~20fps for hand detection (enough for responsive tracking)
+    if (now - lastFrame > 50) {
+      lastFrame = now;
+      try {
+        const hands = await handModel.estimateHands(vid, {flipHorizontal: true});
+        processHandResult(hands);
+      } catch(e) { /* silent fail on frame errors */ }
+    }
+    handLoop = requestAnimationFrame(detect);
+  }
+  detect();
+}
+
+function processHandResult(hands) {
+  const ov = $('cam-ov');
+  if(!ov) return;
+  const ovCtx = ov.getContext('2d');
+  // Clear every frame
+  ov.width = 130; ov.height = 98;
+
+  if (!hands || hands.length === 0) {
+    handDetected = false;
+    handStr = 'NO HAND'; handConf = 0; handLandmarks = [];
+    if($('rd-hand')) $('rd-hand').textContent = '--';
+    if($('br-gest')) $('br-gest').textContent = '--';
+    if($('br-conf')) $('br-conf').textContent = '0%';
+    return;
+  }
+
+  const hand = hands[0];
   handDetected = true;
-  handLandmarks = results.multiHandLandmarks[0]; // 21 points
-  handConf = Math.round((results.multiHandedness?.[0]?.score || 0.9) * 100);
+  handConf = Math.round((hand.score || 0.9) * 100);
 
-  // Map index fingertip to screen coords (mirrored — selfie cam)
-  const tip = handLandmarks[MP.INDEX_TIP];
-  mx = (1 - tip.x) * (W - 400) + 200;
-  my = tip.y * (H - 140) + 60;
+  // keypoints3D has {x,y,z,name} in world space
+  // keypoints has {x,y} in image space (pixels)
+  const kp = hand.keypoints;        // image pixels
+  const kp3 = hand.keypoints3D;     // normalized -1 to 1
 
-  // ── GESTURE DETECTION from landmarks ──
-  const thumbTip  = handLandmarks[MP.THUMB_TIP];
-  const indexTip  = handLandmarks[MP.INDEX_TIP];
-  const middleTip = handLandmarks[MP.MIDDLE_TIP];
-  const ringTip   = handLandmarks[MP.RING_TIP];
-  const pinkyTip  = handLandmarks[MP.PINKY_TIP];
-  const wrist     = handLandmarks[MP.WRIST];
-  const indexMcp  = handLandmarks[MP.INDEX_MCP];
+  // Store normalized landmarks (0-1 range)
+  handLandmarks = kp.map(p => ({
+    x: p.x / vid.videoWidth,
+    y: p.y / vid.videoHeight,
+  }));
 
-  // Pinch: thumb tip close to index tip
-  const pinchDist = Math.hypot(thumbTip.x - indexTip.x, thumbTip.y - indexTip.y);
-  const isPinch = pinchDist < 0.07;
+  // Map index tip to screen cursor (already flipped by flipHorizontal:true)
+  const indexTip = kp[LM.INDEX_TIP];
+  const scaleX = (W - 400) / vid.videoWidth;
+  const scaleY = (H - 140) / vid.videoHeight;
+  mx = indexTip.x * scaleX + 200;
+  my = indexTip.y * scaleY + 60;
 
-  // Open palm: all fingertips above their MCP joints (fingers extended)
-  const fingersUp = [
-    indexTip.y  < handLandmarks[MP.INDEX_MCP].y,
-    middleTip.y < handLandmarks[MP.MIDDLE_MCP].y,
-    ringTip.y   < handLandmarks[MP.RING_MCP].y,
-    pinkyTip.y  < handLandmarks[MP.PINKY_MCP].y,
-  ].filter(Boolean).length;
-  const isOpenPalm = fingersUp >= 3;
+  // ── GESTURE RECOGNITION using 3D keypoints ──
+  const t = kp3[LM.THUMB_TIP];
+  const idx = kp3[LM.INDEX_TIP];
+  const mid = kp3[LM.MIDDLE_TIP];
+  const rng = kp3[LM.RING_TIP];
+  const pky = kp3[LM.PINKY_TIP];
 
-  // Point: only index finger extended
-  const isPoint = indexTip.y < handLandmarks[MP.INDEX_MCP].y
-    && middleTip.y >= handLandmarks[MP.MIDDLE_MCP].y
-    && ringTip.y   >= handLandmarks[MP.RING_MCP].y;
+  // Use image-space keypoints for finger extension (y comparison)
+  const idxMcp = kp[LM.INDEX_MCP];
+  const midMcp = kp[LM.MIDDLE_MCP];
+  const rngMcp = kp[LM.RING_MCP];
+  const pkyMcp = kp[LM.PINKY_MCP];
+  const idxTipImg = kp[LM.INDEX_TIP];
+  const midTipImg = kp[LM.MIDDLE_TIP];
+  const rngTipImg = kp[LM.RING_TIP];
+  const pkyTipImg = kp[LM.PINKY_TIP];
+  const thmTipImg = kp[LM.THUMB_TIP];
+  const wrist = kp[LM.WRIST];
 
-  const g = isPinch ? 'pinch' : isOpenPalm ? 'open' : isPoint ? 'point' : 'fist';
-  handStr = isPinch ? 'PINCH' : isOpenPalm ? 'OPEN PALM' : isPoint ? 'POINT' : 'FIST';
+  // Finger extended: tip is higher than MCP (smaller y = higher on screen)
+  const fingerUp = (tip, mcp) => tip.y < mcp.y - 20;
+  const idxUp  = fingerUp(idxTipImg, idxMcp);
+  const midUp  = fingerUp(midTipImg, midMcp);
+  const rngUp  = fingerUp(rngTipImg, rngMcp);
+  const pkyUp  = fingerUp(pkyTipImg, pkyMcp);
+
+  const fingersUpCount = [idxUp, midUp, rngUp, pkyUp].filter(Boolean).length;
+
+  // Pinch: thumb tip to index tip distance (in image pixels)
+  const pinchDist = Math.hypot(thmTipImg.x - idxTipImg.x, thmTipImg.y - idxTipImg.y);
+  const handSize = Math.hypot(wrist.x - idxMcp.x, wrist.y - idxMcp.y); // normalize to hand size
+  const pinchRatio = pinchDist / Math.max(handSize, 1);
+  const isPinch = pinchRatio < 0.35;
+
+  const isOpenPalm = fingersUpCount >= 3 && !isPinch;
+  const isPoint    = idxUp && !midUp && !rngUp && !pkyUp;
+  const isFist     = fingersUpCount === 0 && !isPinch;
+
+  const g = isPinch ? 'pinch' : isOpenPalm ? 'open' : isPoint ? 'point' : isFist ? 'fist' : 'unknown';
+  handStr = isPinch ? 'PINCH' : isOpenPalm ? 'OPEN PALM' : isPoint ? 'POINT ☝' : isFist ? 'FIST' : 'HAND';
 
   if (g !== prevGest && gestCD <= 0) {
-    gestCD = 8; // shorter cooldown with real tracking
+    gestCD = 6;
     prevGest = g;
-    onGrab(g === 'pinch');
+    onGrab(g === 'pinch' || g === 'fist');
   }
   if (gestCD > 0) gestCD--;
 
-  $('rd-hand').textContent = handStr;
-  $('br-gest').textContent = handStr;
-  $('br-conf').textContent = handConf + '%';
+  if($('rd-hand')) $('rd-hand').textContent = handStr;
+  if($('br-gest')) $('br-gest').textContent = handStr;
+  if($('br-conf')) $('br-conf').textContent = handConf + '%';
 
-  // ── DRAW LANDMARKS ON CAM OVERLAY ──
-  const scX = 130, scY = 98; // overlay is 130x98
+  // ── DRAW SKELETON ON OVERLAY ──
+  const sw = 130 / vid.videoWidth;
+  const sh = 98 / vid.videoHeight;
 
-  // Draw skeleton connections
-  const CONNECTIONS = [
-    // Thumb
-    [0,1],[1,2],[2,3],[3,4],
-    // Index
-    [0,5],[5,6],[6,7],[7,8],
-    // Middle
-    [9,10],[10,11],[11,12],
-    // Ring
-    [13,14],[14,15],[15,16],
-    // Pinky
-    [17,18],[18,19],[19,20],
-    // Palm
-    [0,5],[5,9],[9,13],[13,17],[0,17],
-  ];
-
-  ovCtx.strokeStyle = 'rgba(0,216,255,0.45)';
-  ovCtx.lineWidth = 0.8;
+  // Connections
   CONNECTIONS.forEach(([a, b]) => {
-    const la = handLandmarks[a], lb = handLandmarks[b];
-    if (!la || !lb) return;
+    const pa = kp[a], pb = kp[b];
+    if (!pa || !pb) return;
+    ovCtx.strokeStyle = isPinch ? 'rgba(0,255,136,0.6)' : 'rgba(0,216,255,0.4)';
+    ovCtx.lineWidth = 0.8;
     ovCtx.beginPath();
-    ovCtx.moveTo((1 - la.x) * scX, la.y * scY);
-    ovCtx.lineTo((1 - lb.x) * scX, lb.y * scY);
+    ovCtx.moveTo(pa.x * sw, pa.y * sh);
+    ovCtx.lineTo(pb.x * sw, pb.y * sh);
     ovCtx.stroke();
   });
 
-  // Draw joints
-  handLandmarks.forEach((lm, i) => {
-    const x = (1 - lm.x) * scX;
-    const y = lm.y * scY;
+  // Joints
+  kp.forEach((p, i) => {
     const isTip = [4,8,12,16,20].includes(i);
     const isWrist = i === 0;
     ovCtx.beginPath();
-    ovCtx.arc(x, y, isTip ? 3 : isWrist ? 2.5 : 1.5, 0, Math.PI * 2);
-    ovCtx.fillStyle = isTip ? 'rgba(0,255,136,0.9)' : isWrist ? 'rgba(255,102,0,0.8)' : 'rgba(0,216,255,0.7)';
+    ovCtx.arc(p.x * sw, p.y * sh, isTip ? 3 : isWrist ? 2.5 : 1.5, 0, Math.PI*2);
+    ovCtx.fillStyle = isTip
+      ? (isPinch ? 'rgba(0,255,136,1)' : 'rgba(0,255,136,0.9)')
+      : isWrist ? 'rgba(255,102,0,0.9)'
+      : 'rgba(0,216,255,0.75)';
     ovCtx.fill();
   });
 
-  // Pinch indicator line
+  // Pinch line
   if (isPinch) {
-    ovCtx.strokeStyle = 'rgba(0,255,136,0.9)';
-    ovCtx.lineWidth = 1.5;
+    ovCtx.strokeStyle = 'rgba(0,255,136,0.95)';
+    ovCtx.lineWidth = 2;
     ovCtx.beginPath();
-    ovCtx.moveTo((1 - thumbTip.x) * scX, thumbTip.y * scY);
-    ovCtx.lineTo((1 - indexTip.x) * scX, indexTip.y * scY);
+    ovCtx.moveTo(thmTipImg.x * sw, thmTipImg.y * sh);
+    ovCtx.lineTo(idxTipImg.x * sw, idxTipImg.y * sh);
     ovCtx.stroke();
-    // Pinch distance label
-    ovCtx.fillStyle = 'rgba(0,255,136,0.8)';
-    ovCtx.font = '7px monospace';
-    ovCtx.fillText('PINCH', 4, 10);
   }
 
   // Gesture label
-  ovCtx.fillStyle = 'rgba(0,216,255,0.7)';
-  ovCtx.font = '7px monospace';
-  ovCtx.fillText(handStr, 4, scY - 4);
+  ovCtx.fillStyle = isPinch ? 'rgba(0,255,136,0.9)' : 'rgba(0,216,255,0.7)';
+  ovCtx.font = 'bold 7px monospace';
+  ovCtx.fillText(handStr, 3, 95);
 }
-
-function isSkin(){} // kept as stub so no reference errors
 
 function onGrab(on) {
   pinching = on;
   if (on) { SFX.grab(); if (!viewerOpen) setCoreState('active'); }
   else { SFX.release(); if (!viewerOpen) setTimeout(() => { if (!speaking && !listening) setCoreState(wakeActive ? 'listening' : 'idle'); }, 500); }
 }
-
 
 // ── 3D VIEWER ──
 function openFilePrompt(){
@@ -1557,7 +1637,22 @@ function frame(ts){
 }
 
 // ── MODEL BUTTONS ──
-document.querySelectorAll('[data-m]').forEach(b=>{b.addEventListener('click',()=>{document.querySelectorAll('[data-m]').forEach(q=>q.classList.remove('on'));b.classList.add('on');currentModel=b.dataset.m;currentProvider=b.dataset.p||'ollama';if($('mlbl'))$('mlbl').textContent=b.textContent;notif('MODEL: '+b.textContent);SFX.model();});});
+document.querySelectorAll('[data-m]').forEach(b=>{
+  b.addEventListener('click',()=>{
+    document.querySelectorAll('[data-m]').forEach(q=>q.classList.remove('on'));
+    b.classList.add('on');
+    const newModel = b.dataset.m;
+    if(newModel === currentModel) return;
+    currentModel = newModel;
+    currentProvider = b.dataset.p || 'webllm';
+    if($('mlbl')) $('mlbl').textContent = b.textContent.replace('⚡','').trim();
+    notif('SWITCHING MODEL: '+b.textContent);
+    SFX.model();
+    // Reload WebLLM with new model
+    webllmEngine = null; webllmReady = false; webllmLoading = false;
+    setTimeout(()=>initWebLLM(currentModel), 300);
+  });
+});
 
 // ── BOOT SEQUENCE ──
 
@@ -1675,30 +1770,17 @@ if(checkSavedUser()){
 
 function boot(){
   hx=CX; hy=CY;
-  SFX.boot(); // startup SFX fires the moment user authenticates
+  SFX.boot();
   jVoice=findMaleVoice(); setTimeout(()=>{ jVoice=findMaleVoice(); },600);
-  loadYTApi(); // preload YT iframe API
+  loadYTApi();
   updateData(); updateBattery(); fetchWeather();
   setInterval(updateData,3000); setInterval(updateBattery,15000);
   requestAnimationFrame(frame);
-  // Pre-warm Ollama model in background
-    setTimeout(async()=>{
-    try{
-      await fetch('http://localhost:11434/',{signal:AbortSignal.timeout(2000)});
-      await fetch('http://localhost:11434/api/generate',{
-        method:'POST',headers:{'Content-Type':'application/json'},
-        signal:AbortSignal.timeout(30000),
-        body:JSON.stringify({model:currentModel,prompt:'hi',stream:false,options:{num_predict:1}})
-      });
-      notif('OLLAMA READY');SFX.confirm();
-    }catch(e){
-      notif('OLLAMA: run with OLLAMA_ORIGINS=* ollama serve','warn');
-      setTimeout(showOllamaHelp,2000);
-    }
-  },1500);
+  // Start loading WebLLM model into browser (downloads once, then cached)
+  setTimeout(()=>{ initWebLLM(currentModel); }, 1200);
   setTimeout(()=>{
     jVoice=findMaleVoice();
-    speak(`Welcome${userName?', '+userName:''}.  Jarvis online. Say Jarvis to activate voice.`,true);
+    speak(`Welcome${userName?', '+userName:''}. Jarvis online. Loading AI model now.`,true);
   },800);
 }
 
