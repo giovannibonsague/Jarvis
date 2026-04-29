@@ -2,11 +2,8 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<!-- TensorFlow.js + HandPose — loaded statically for reliability -->
-<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-core@4.20.0/dist/tf-core.min.js" crossorigin="anonymous"></script>
-<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-webgl@4.20.0/dist/tf-backend-webgl.min.js" crossorigin="anonymous"></script>
-<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-converter@4.20.0/dist/tf-converter.min.js" crossorigin="anonymous"></script>
-<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/hand-pose-detection@2.0.1/dist/hand-pose-detection.min.js" crossorigin="anonymous"></script>
+<!-- MediaPipe Tasks Vision -->
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.js" crossorigin="anonymous"></script></script>
 <title>J.A.R.V.I.S</title>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;600;700;900&family=Share+Tech+Mono&display=swap');
@@ -237,6 +234,7 @@ html,body{width:100%;height:100%;overflow:hidden;background:#000;cursor:none;
 #drag-overlay-sub{font-size:9px;letter-spacing:0.25em;color:rgba(0,216,255,0.45)}
 
 </style>
+<script src="https://cdn.jsdelivr.net/npm/@mlc-ai/web-llm@0.2.73/lib/index.min.js" crossorigin="anonymous"></script>
 </head>
 <body>
 
@@ -803,21 +801,36 @@ window.onYouTubeIframeAPIReady = function(){
 // Search YouTube via internal (no API key) scrape approach
 // Uses a CORS proxy to get YT search results
 async function searchYouTube(query){
-  // Use Invidious (open YouTube frontend) search API - no key needed
-  const instances = [
-    'https://invidious.snopyta.org',
-    'https://vid.puffyan.us',
-    'https://invidious.kavin.rocks',
-  ];
-  for(const base of instances){
-    try{
-      const r = await fetch(`${base}/api/v1/search?q=${encodeURIComponent(query)}&type=video&fields=videoId,title`,
-        {signal: AbortSignal.timeout(4000)});
-      if(!r.ok) continue;
+  // Use YouTube's own search suggestions API — no key, no CORS issues
+  // Returns video ID by encoding the query as a YouTube search URL
+  // We load it via the YouTube IFrame player search feature
+  // Fallback: use YouTube search embed directly
+  try{
+    // Try youtube-search via a public CORS-friendly proxy
+    const url = `https://yt.lemnoslife.com/noKey/search?part=snippet&q=${encodeURIComponent(query)}&type=video&maxResults=1`;
+    const r = await fetch(url, {signal:AbortSignal.timeout(5000)});
+    if(r.ok){
       const d = await r.json();
-      if(d && d[0]) return d[0];
-    }catch(e){ continue; }
-  }
+      if(d.items?.[0]){
+        return {
+          videoId: d.items[0].id.videoId,
+          title: d.items[0].snippet.title
+        };
+      }
+    }
+  }catch(e){}
+
+  // Fallback: use DuckDuckGo to find YouTube video ID
+  try{
+    const r = await fetch(`https://api.duckduckgo.com/?q=${encodeURIComponent(query+' site:youtube.com')}&format=json&no_redirect=1`,
+      {signal:AbortSignal.timeout(4000)});
+    const d = await r.json();
+    // Extract video ID from any YouTube URL in results
+    const allText = JSON.stringify(d);
+    const match = allText.match(/youtube\.com\/watch\?v=([a-zA-Z0-9_-]{11})/);
+    if(match) return {videoId: match[1], title: query};
+  }catch(e){}
+
   return null;
 }
 
@@ -1015,7 +1028,7 @@ let webllmLoading = false;
 let webllmReady = false;
 
 // WebLLM CDN
-const WEBLLM_CDN = 'https://esm.run/@mlc-ai/web-llm';
+// WebLLM loaded via <head> script tag
 
 // Load WebLLM as ES module
 async function initWebLLM(modelId) {
@@ -1028,7 +1041,9 @@ async function initWebLLM(modelId) {
   setCoreState('processing');
 
   try {
-    const { CreateMLCEngine } = await import(WEBLLM_CDN);
+    // webllm loaded from CDN script tag
+    const CreateMLCEngine = window.webllm?.CreateMLCEngine;
+    if(!CreateMLCEngine) throw new Error('WebLLM not loaded from CDN');
 
     webllmEngine = await CreateMLCEngine(modelId, {
       initProgressCallback: (progress) => {
@@ -1178,333 +1193,155 @@ async function sendAI(msg) {
 }
 
 // ══════════════════════════════════════════
-//  HAND TRACKING — TensorFlow.js + HandPose
-//  Reliable CDN, real 21 landmarks, works in browsers
+//  HAND TRACKING — MediaPipe Tasks Vision
+//  Single WASM bundle, official Google lib
 // ══════════════════════════════════════════
-let handModel = null, handModelLoading = false;
-// (declared above)
+let handLandmarker = null, handTrackerReady = false;
+// handDetected = false, handLandmarks = [];
 let prevGest = 'none', gestCD = 0, handConf = 0, handStr = 'NO HAND';
-let handCanvas = document.createElement('canvas');
-let handCtx = handCanvas.getContext('2d');
-let handLoop = null;
+let lastVideoTime = -1;
 
-// Landmark indices (same as MediaPipe)
-const LM = {
-  WRIST:0,
-  THUMB_CMC:1, THUMB_MCP:2, THUMB_IP:3, THUMB_TIP:4,
-  INDEX_MCP:5, INDEX_PIP:6, INDEX_DIP:7, INDEX_TIP:8,
-  MIDDLE_MCP:9, MIDDLE_PIP:10, MIDDLE_DIP:11, MIDDLE_TIP:12,
-  RING_MCP:13, RING_PIP:14, RING_DIP:15, RING_TIP:16,
-  PINKY_MCP:17, PINKY_PIP:18, PINKY_DIP:19, PINKY_TIP:20,
-};
+const HAND_CONN = [[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],
+  [0,9],[9,10],[10,11],[11,12],[0,13],[13,14],[14,15],[15,16],
+  [0,17],[17,18],[18,19],[19,20],[5,9],[9,13],[13,17]];
 
-// Skeleton connections for drawing
-const CONNECTIONS = [
-  [0,1],[1,2],[2,3],[3,4],         // thumb
-  [0,5],[5,6],[6,7],[7,8],         // index
-  [0,9],[9,10],[10,11],[11,12],    // middle
-  [0,13],[13,14],[14,15],[15,16],  // ring
-  [0,17],[17,18],[18,19],[19,20],  // pinky
-  [5,9],[9,13],[13,17],            // palm knuckles
-];
-
-async function loadHandModel() {
-  if(handModel || handModelLoading) return;
-  handModelLoading = true;
-  try {
-    // TF.js + HandPose — loads from CDN
-    handModel = await window.handPoseDetection.createDetector(
-      window.handPoseDetection.SupportedModels.MediaPipeHands,
-      {
-        runtime: 'tfjs',
-        modelType: 'lite',
-        maxHands: 1,
-      }
-    );
-    $('cam-lbl').textContent = 'CAM + HANDS';
-    $('rd-gest').textContent = 'TFJS HANDS';
-    $('rd-gest').style.color = 'var(--g)';
-    notif('HAND TRACKING LOADED');
-    SFX.confirm();
-    handModelLoading = false;
-  } catch(e) {
-    handModelLoading = false;
-    $('rd-gest').textContent = 'MODEL FAILED';
-    notif('Hand model failed: '+e.message.slice(0,40));
-    console.error('HandPose load error:', e);
-  }
-}
-
-function startCam(stream) {
+async function startCam(stream) {
   $('cam-feed').srcObject = stream;
   $('cam-feed').classList.add('on');
-  const camOv = $('cam-ov');
-  if(camOv){ camOv.classList.add('on'); camOv.width=130; camOv.height=98; }
-  // TF.js already loaded from <head> scripts
-  // Small delay to ensure scripts initialised
-  setTimeout(() => {
-    if(typeof window.handPoseDetection !== 'undefined') {
-      camReady = true;
-      $('cam-dot').classList.add('on');
-      $('cam-lbl').textContent = 'INITIALIZING...';
-      loadHandModel().then(() => startHandLoop());
-    } else {
-      // Scripts not loaded yet — wait
-      const check = setInterval(() => {
-        if(typeof window.handPoseDetection !== 'undefined') {
-          clearInterval(check);
-          camReady = true;
-          $('cam-dot').classList.add('on');
-          loadHandModel().then(() => startHandLoop());
-        }
-      }, 300);
-      setTimeout(() => {
-        clearInterval(check);
-        if(!camReady) {
-          camReady = true;
-          $('cam-dot').classList.add('on');
-          $('cam-lbl').textContent = 'CAM (no ML)';
-          notif('HandPose unavailable — check internet','warn');
-        }
-      }, 8000);
-    }
-  }, 500);
-}
-
-async function loadHandModel() {
-  if(handModel || handModelLoading) return;
-  handModelLoading = true;
-  try {
-    // TF.js + HandPose — loads from CDN
-    handModel = await window.handPoseDetection.createDetector(
-      window.handPoseDetection.SupportedModels.MediaPipeHands,
-      {
-        runtime: 'tfjs',
-        modelType: 'lite',
-        maxHands: 1,
-      }
-    );
-    $('cam-lbl').textContent = 'CAM + HANDS';
-    $('rd-gest').textContent = 'TFJS HANDS';
-    $('rd-gest').style.color = 'var(--g)';
-    notif('HAND TRACKING LOADED');
-    SFX.confirm();
-    handModelLoading = false;
-  } catch(e) {
-    handModelLoading = false;
-    $('rd-gest').textContent = 'MODEL FAILED';
-    notif('Hand model failed: '+e.message.slice(0,40));
-    console.error('HandPose load error:', e);
-  }
-}
-
-function startCam(stream) {
-  $('cam-feed').srcObject = stream;
-  $('cam-feed').classList.add('on');
-  const camOv = $('cam-ov');
-  if(camOv){ camOv.classList.add('on'); camOv.width=130; camOv.height=98; }
-
-  // Load TF.js + Hand detection scripts sequentially
-  function loadScript(src, cb) {
-    if(document.querySelector(`script[src="${src}"]`)) { cb(); return; }
-    const s = document.createElement('script');
-    s.src = src;
-    s.crossOrigin = 'anonymous';
-    s.onload = cb;
-    s.onerror = () => { console.warn('Script failed:', src); cb(); };
-    document.head.appendChild(s);
-  }
-
-  const tfcdn = 'https://cdn.jsdelivr.net/npm/@tensorflow';
-  const mpcdn = 'https://cdn.jsdelivr.net/npm/@mediapipe/hands';
-
-  loadScript(tfcdn+'/tfjs-core@4.20.0/dist/tf-core.min.js', () =>
-    loadScript(tfcdn+'/tfjs-backend-webgl@4.20.0/dist/tf-backend-webgl.min.js', () =>
-      loadScript(tfcdn+'/tfjs-converter@4.20.0/dist/tf-converter.min.js', () =>
-        loadScript('https://cdn.jsdelivr.net/npm/@tensorflow-models/hand-pose-detection@2.0.1/dist/hand-pose-detection.min.js', () => {
-          if(typeof window.handPoseDetection !== 'undefined') {
-            camReady = true;
-            $('cam-dot').classList.add('on');
-            loadHandModel().then(() => startHandLoop());
-          } else {
-            notif('TF.js unavailable — check connection','warn');
-            camReady = true;
-            $('cam-dot').classList.add('on');
-            $('cam-lbl').textContent = 'CAM (no ML)';
-          }
-        })
-      )
-    )
-  );
-}
-
-function startHandLoop() {
-  const vid = $('cam-feed');
-  let lastFrame = 0;
-
-  async function detect() {
-    if (!handModel || !vid.videoWidth) {
-      handLoop = requestAnimationFrame(detect);
-      return;
-    }
-
-    const now = performance.now();
-    // Run at ~20fps for hand detection (enough for responsive tracking)
-    if (now - lastFrame > 50) {
-      lastFrame = now;
-      try {
-        const hands = await handModel.estimateHands(vid, {flipHorizontal: true});
-        processHandResult(hands);
-      } catch(e) { /* silent fail on frame errors */ }
-    }
-    handLoop = requestAnimationFrame(detect);
-  }
-  detect();
-}
-
-function processHandResult(hands) {
   const ov = $('cam-ov');
-  if(!ov) return;
-  const ovCtx = ov.getContext('2d');
-  // Clear every frame
-  ov.width = 130; ov.height = 98;
+  if(ov){ ov.classList.add('on'); ov.width=130; ov.height=98; }
+  camReady = true;
+  $('cam-dot').classList.add('on');
+  $('cam-lbl').textContent = 'LOADING HANDS...';
+  await initHandLandmarker();
+  if(handTrackerReady) startHandLoop();
+}
 
-  if (!hands || hands.length === 0) {
-    handDetected = false;
-    handStr = 'NO HAND'; handConf = 0; handLandmarks = [];
-    if($('rd-hand')) $('rd-hand').textContent = '--';
-    if($('br-gest')) $('br-gest').textContent = '--';
-    if($('br-conf')) $('br-conf').textContent = '0%';
+async function initHandLandmarker(){
+  // Poll for MediaPipe bundle to finish loading (async CDN)
+  let attempts = 0;
+  while(!window.mpTasksVision && !window.HandLandmarker && attempts < 50){
+    await new Promise(r=>setTimeout(r,200)); attempts++;
+  }
+  try{
+    const lib = window.mpTasksVision || window;
+    const {HandLandmarker, FilesetResolver} = lib;
+    if(!HandLandmarker) throw new Error('HandLandmarker not exported');
+    const vision = await FilesetResolver.forVisionTasks(
+      'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm'
+    );
+    handLandmarker = await HandLandmarker.createFromOptions(vision,{
+      baseOptions:{
+        modelAssetPath:'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task',
+        delegate:'GPU'
+      },
+      runningMode:'VIDEO', numHands:1,
+      minHandDetectionConfidence:0.55,
+      minHandPresenceConfidence:0.55,
+      minTrackingConfidence:0.5
+    });
+    handTrackerReady = true;
+    $('cam-lbl').textContent='HANDS ACTIVE';
+    $('rd-gest').textContent='MP TASKS'; $('rd-gest').style.color='var(--g)';
+    notif('HAND TRACKING READY'); SFX.confirm();
+  }catch(err){
+    console.error('HandLandmarker failed:',err);
+    $('cam-lbl').textContent='HAND ML FAILED';
+    notif('Hand tracking: '+err.message.slice(0,50),'warn');
+  }
+}
+
+function startHandLoop(){
+  const vid=$('cam-feed');
+  function loop(){
+    requestAnimationFrame(loop);
+    if(!handLandmarker||vid.readyState<2||!vid.videoWidth) return;
+    if(vid.currentTime===lastVideoTime) return;
+    lastVideoTime=vid.currentTime;
+    try{ processHandResults(handLandmarker.detectForVideo(vid,performance.now())); }
+    catch(e){}
+  }
+  loop();
+}
+
+function processHandResults(res){
+  const ov=$('cam-ov');
+  if(!ov) return;
+  const oc=ov.getContext('2d');
+  ov.width=130; ov.height=98;
+  if(!res?.landmarks?.length){
+    handDetected=false; handStr='NO HAND'; handConf=0; handLandmarks=[];
+    if($('rd-hand'))$('rd-hand').textContent='--';
+    if($('br-gest'))$('br-gest').textContent='--';
+    if($('br-conf'))$('br-conf').textContent='0%';
     return;
   }
+  handDetected=true;
+  const lm=res.landmarks[0];
+  handLandmarks=lm;
+  handConf=Math.round((res.handednesses?.[0]?.[0]?.score||0.9)*100);
 
-  const hand = hands[0];
-  handDetected = true;
-  handConf = Math.round((hand.score || 0.9) * 100);
+  // Map index tip to cursor — mirrored
+  const tip8=lm[8];
+  mx=(1-tip8.x)*(W-400)+200;
+  my=tip8.y*(H-140)+60;
 
-  // keypoints3D has {x,y,z,name} in world space
-  // keypoints has {x,y} in image space (pixels)
-  const kp = hand.keypoints;        // image pixels
-  const kp3 = hand.keypoints3D;     // normalized -1 to 1
+  // Gesture detection
+  const handSz=Math.hypot(lm[0].x-lm[5].x,lm[0].y-lm[5].y)||0.1;
+  const thr=handSz*0.35;
+  const idxUp=lm[8].y<lm[5].y-thr;
+  const midUp=lm[12].y<lm[9].y-thr;
+  const rngUp=lm[16].y<lm[13].y-thr;
+  const pkyUp=lm[20].y<lm[17].y-thr;
+  const nUp=[idxUp,midUp,rngUp,pkyUp].filter(Boolean).length;
+  const pinchD=Math.hypot(lm[4].x-lm[8].x,lm[4].y-lm[8].y);
+  const isPinch=pinchD/handSz<0.5;
+  const isOpen=nUp>=3&&!isPinch;
+  const isPoint=idxUp&&!midUp&&!rngUp&&!pkyUp;
+  const isFist=nUp===0&&!isPinch;
+  const g=isPinch?'pinch':isOpen?'open':isPoint?'point':isFist?'fist':'partial';
+  handStr=isPinch?'PINCH':isOpen?'OPEN PALM':isPoint?'POINT ☝':isFist?'FIST':'HAND';
 
-  // Store normalized landmarks (0-1 range)
-  handLandmarks = kp.map(p => ({
-    x: p.x / vid.videoWidth,
-    y: p.y / vid.videoHeight,
-  }));
+  if(g!==prevGest&&gestCD<=0){gestCD=5;prevGest=g;onGrab(g==='pinch'||g==='fist');}
+  if(gestCD>0)gestCD--;
 
-  // Map index tip to screen cursor (already flipped by flipHorizontal:true)
-  const indexTip = kp[LM.INDEX_TIP];
-  const scaleX = (W - 400) / vid.videoWidth;
-  const scaleY = (H - 140) / vid.videoHeight;
-  mx = indexTip.x * scaleX + 200;
-  my = indexTip.y * scaleY + 60;
+  if($('rd-hand'))$('rd-hand').textContent=handStr;
+  if($('br-gest'))$('br-gest').textContent=handStr;
+  if($('br-conf'))$('br-conf').textContent=handConf+'%';
 
-  // ── GESTURE RECOGNITION using 3D keypoints ──
-  const t = kp3[LM.THUMB_TIP];
-  const idx = kp3[LM.INDEX_TIP];
-  const mid = kp3[LM.MIDDLE_TIP];
-  const rng = kp3[LM.RING_TIP];
-  const pky = kp3[LM.PINKY_TIP];
-
-  // Use image-space keypoints for finger extension (y comparison)
-  const idxMcp = kp[LM.INDEX_MCP];
-  const midMcp = kp[LM.MIDDLE_MCP];
-  const rngMcp = kp[LM.RING_MCP];
-  const pkyMcp = kp[LM.PINKY_MCP];
-  const idxTipImg = kp[LM.INDEX_TIP];
-  const midTipImg = kp[LM.MIDDLE_TIP];
-  const rngTipImg = kp[LM.RING_TIP];
-  const pkyTipImg = kp[LM.PINKY_TIP];
-  const thmTipImg = kp[LM.THUMB_TIP];
-  const wrist = kp[LM.WRIST];
-
-  // Finger extended: tip is higher than MCP (smaller y = higher on screen)
-  // Finger extended: tip is above MCP by at least 15% of hand height
-  // Using relative threshold prevents lighting/distance issues
-  const handH = Math.abs(wrist.y - idxMcp.y) || 40;
-  const threshold = Math.max(15, handH * 0.25);
-  const fingerUp = (tip, mcp) => tip.y < mcp.y - threshold;
-  const idxUp  = fingerUp(idxTipImg, idxMcp);
-  const midUp  = fingerUp(midTipImg, midMcp);
-  const rngUp  = fingerUp(rngTipImg, rngMcp);
-  const pkyUp  = fingerUp(pkyTipImg, pkyMcp);
-
-  const fingersUpCount = [idxUp, midUp, rngUp, pkyUp].filter(Boolean).length;
-
-  // Pinch: thumb tip to index tip distance (in image pixels)
-  const pinchDist = Math.hypot(thmTipImg.x - idxTipImg.x, thmTipImg.y - idxTipImg.y);
-  const handSize = Math.hypot(wrist.x - idxMcp.x, wrist.y - idxMcp.y); // normalize to hand size
-  const pinchRatio = pinchDist / Math.max(handSize, 1);
-  const isPinch = pinchRatio < 0.42; // more forgiving threshold
-
-  const isOpenPalm = fingersUpCount >= 3 && !isPinch;
-  const isPoint    = idxUp && !midUp && !rngUp && !pkyUp;
-  const isFist     = fingersUpCount === 0 && !isPinch;
-
-  const g = isPinch ? 'pinch' : isOpenPalm ? 'open' : isPoint ? 'point' : isFist ? 'fist' : 'unknown';
-  handStr = isPinch ? 'PINCH' : isOpenPalm ? 'OPEN PALM' : isPoint ? 'POINT ☝' : isFist ? 'FIST' : 'HAND';
-
-  if (g !== prevGest && gestCD <= 0) {
-    gestCD = 6;
-    prevGest = g;
-    onGrab(g === 'pinch' || g === 'fist');
-  }
-  if (gestCD > 0) gestCD--;
-
-  if($('rd-hand')) $('rd-hand').textContent = handStr;
-  if($('br-gest')) $('br-gest').textContent = handStr;
-  if($('br-conf')) $('br-conf').textContent = handConf + '%';
-
-  // ── DRAW SKELETON ON OVERLAY ──
-  const sw = 130 / vid.videoWidth;
-  const sh = 98 / vid.videoHeight;
-
-  // Connections
-  CONNECTIONS.forEach(([a, b]) => {
-    const pa = kp[a], pb = kp[b];
-    if (!pa || !pb) return;
-    ovCtx.strokeStyle = isPinch ? 'rgba(0,255,136,0.6)' : 'rgba(0,216,255,0.4)';
-    ovCtx.lineWidth = 0.8;
-    ovCtx.beginPath();
-    ovCtx.moveTo(pa.x * sw, pa.y * sh);
-    ovCtx.lineTo(pb.x * sw, pb.y * sh);
-    ovCtx.stroke();
+  // Draw skeleton
+  const vid=$('cam-feed');
+  HAND_CONN.forEach(([a,b])=>{
+    oc.strokeStyle=isPinch?'rgba(0,255,136,0.65)':'rgba(0,216,255,0.45)';
+    oc.lineWidth=0.8;
+    oc.beginPath();
+    oc.moveTo((1-lm[a].x)*130,lm[a].y*98);
+    oc.lineTo((1-lm[b].x)*130,lm[b].y*98);
+    oc.stroke();
   });
-
-  // Joints
-  kp.forEach((p, i) => {
-    const isTip = [4,8,12,16,20].includes(i);
-    const isWrist = i === 0;
-    ovCtx.beginPath();
-    ovCtx.arc(p.x * sw, p.y * sh, isTip ? 3 : isWrist ? 2.5 : 1.5, 0, Math.PI*2);
-    ovCtx.fillStyle = isTip
-      ? (isPinch ? 'rgba(0,255,136,1)' : 'rgba(0,255,136,0.9)')
-      : isWrist ? 'rgba(255,102,0,0.9)'
-      : 'rgba(0,216,255,0.75)';
-    ovCtx.fill();
+  lm.forEach((p,i)=>{
+    const isTip=[4,8,12,16,20].includes(i);
+    oc.beginPath();
+    oc.arc((1-p.x)*130,p.y*98,isTip?3.5:i===0?3:1.8,0,Math.PI*2);
+    oc.fillStyle=isTip?(isPinch?'#00ff88':'rgba(0,255,136,0.9)'):i===0?'rgba(255,102,0,0.9)':'rgba(0,216,255,0.75)';
+    oc.fill();
   });
-
-  // Pinch line
-  if (isPinch) {
-    ovCtx.strokeStyle = 'rgba(0,255,136,0.95)';
-    ovCtx.lineWidth = 2;
-    ovCtx.beginPath();
-    ovCtx.moveTo(thmTipImg.x * sw, thmTipImg.y * sh);
-    ovCtx.lineTo(idxTipImg.x * sw, idxTipImg.y * sh);
-    ovCtx.stroke();
+  if(isPinch){
+    oc.strokeStyle='#00ff88'; oc.lineWidth=2;
+    oc.beginPath();
+    oc.moveTo((1-lm[4].x)*130,lm[4].y*98);
+    oc.lineTo((1-lm[8].x)*130,lm[8].y*98);
+    oc.stroke();
   }
-
-  // Gesture label
-  ovCtx.fillStyle = isPinch ? 'rgba(0,255,136,0.9)' : 'rgba(0,216,255,0.7)';
-  ovCtx.font = 'bold 7px monospace';
-  ovCtx.fillText(handStr, 3, 95);
+  oc.fillStyle=isPinch?'#00ff88':'rgba(0,216,255,0.75)';
+  oc.font='bold 7px monospace';
+  oc.fillText(handStr,3,94);
 }
 
-function onGrab(on) {
-  pinching = on;
-  if (on) { SFX.grab(); if (!viewerOpen) setCoreState('active'); }
-  else { SFX.release(); if (!viewerOpen) setTimeout(() => { if (!speaking && !listening) setCoreState(wakeActive ? 'listening' : 'idle'); }, 500); }
+function onGrab(on){
+  pinching=on;
+  if(on){SFX.grab();if(!viewerOpen)setCoreState('active');}
+  else{SFX.release();if(!viewerOpen)setTimeout(()=>{if(!speaking&&!listening)setCoreState(wakeActive?'listening':'idle');},500);}
 }
 
 // ── 3D VIEWER ──
