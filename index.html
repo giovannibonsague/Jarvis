@@ -3,21 +3,18 @@
 <head>
 <meta charset="UTF-8">
 <script type="module">
-  // MediaPipe — must use .mjs ESM bundle, the UMD bundle doesn't expose globals correctly
-  try {
-    const { HandLandmarker, FilesetResolver } =
-      await import('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs');
-    window._mpHandLandmarker  = HandLandmarker;
-    window._mpFilesetResolver = FilesetResolver;
-    window._mpReady = true;
-  } catch(e) { console.warn('MediaPipe load failed:', e); window._mpReady = false; }
-
-  // WebLLM — jsDelivr ESM (only path that actually works in browser without a bundler)
-  try {
-    const webllm = await import('https://cdn.jsdelivr.net/npm/@mlc-ai/web-llm@0.2.73/lib/index.mjs');
-    window._webllmCreateEngine = webllm.CreateMLCEngine ?? webllm.CreateEngine ?? webllm.default?.CreateMLCEngine;
-    window._webllmReady = !!window._webllmCreateEngine;
-  } catch(e) { console.warn('WebLLM load failed:', e); window._webllmReady = false; }
+  // ── WebLLM 0.2.83 — ES module, must use type=module, NOT dynamic import() from classic script ──
+  // Store on window so the classic DOMContentLoaded script can access it
+  import { CreateMLCEngine } from 'https://cdn.jsdelivr.net/npm/@mlc-ai/web-llm@0.2.83/lib/index.js';
+  window._webllmCreate = CreateMLCEngine;
+  window._webllmReady  = true;
+</script>
+<script type="module">
+  // ── MediaPipe Tasks Vision 0.10.14 — also ES module only ──
+  import { HandLandmarker, FilesetResolver } from 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs';
+  window._mpHandLandmarker  = HandLandmarker;
+  window._mpFilesetResolver = FilesetResolver;
+  window._mpReady = true;
 </script>
 <title>J.A.R.V.I.S</title>
 <style>
@@ -249,7 +246,7 @@ html,body{width:100%;height:100%;overflow:hidden;background:#000;cursor:none;
 #drag-overlay-sub{font-size:9px;letter-spacing:0.25em;color:rgba(0,216,255,0.45)}
 
 </style>
-<!-- WebLLM loaded via type=module script in <head> -->
+<!-- WebLLM + MediaPipe loaded via type=module scripts in head -->
 </head>
 <body>
 
@@ -814,9 +811,7 @@ window.onYouTubeIframeAPIReady = function(){
 };
 
 // Search YouTube via internal (no API key) scrape approach
-// Search YouTube via public APIs — no key required
 async function searchYouTube(query){
-  // Try Piped API instances (CORS-open, no key)
   const PIPED = [
     'https://pipedapi.kavin.rocks',
     'https://piped-api.garudalinux.org',
@@ -836,7 +831,6 @@ async function searchYouTube(query){
       }
     }catch(e){}
   }
-  // Try Invidious instances
   const INVIDIOUS = [
     'https://inv.riverside.rocks',
     'https://invidious.namazso.eu',
@@ -890,11 +884,7 @@ async function playMusic(query){
       events:{
         onReady: e => {
           e.target.playVideo();
-          // Unmute after brief delay — satisfies browser autoplay policy
-          setTimeout(()=>{
-            e.target.unMute();
-            e.target.setVolume(Math.round(($('vol-sl').value||0.8)*100));
-          }, 800);
+          setTimeout(()=>{ e.target.unMute(); e.target.setVolume(Math.round(($('vol-sl').value||0.8)*100)); }, 800);
           startProgressTracking();
           setCoreState('active');
           setTimeout(()=>setCoreState('idle'),1000);
@@ -1061,24 +1051,24 @@ async function initWebLLM(modelId) {
   notif('LOADING AI MODEL INTO BROWSER...');
   setCoreState('processing');
 
-  // Wait for the module script in <head> to finish loading WebLLM
+  // Wait for the type=module script in <head> to finish (runs async before DOMContentLoaded)
   let attempts = 0;
-  while(window._webllmReady === undefined && attempts < 100) {
+  while(!window._webllmReady && attempts < 150) {
     await new Promise(r => setTimeout(r, 200)); attempts++;
   }
 
-  if(!window._webllmReady || !window._webllmCreateEngine) {
+  if(!window._webllmCreate) {
     webllmLoading = false;
     hideModelLoadProgress();
-    notif('WebLLM module failed to load', 'warn');
+    notif('WebLLM module did not load — check network / CSP', 'warn');
     setCoreState('idle');
-    speak('WebLLM failed to load. Make sure you are using Chrome 113 or newer with WebGPU enabled.');
+    speak('WebLLM failed to load. Ensure Chrome 113 or newer with WebGPU enabled.');
     showWebGPUWarning();
     return;
   }
 
   try {
-    webllmEngine = await window._webllmCreateEngine(modelId, {
+    webllmEngine = await window._webllmCreate(modelId, {
       initProgressCallback: (progress) => {
         const pct = Math.round((progress.progress || 0) * 100);
         const text = progress.text || '';
@@ -1098,14 +1088,14 @@ async function initWebLLM(modelId) {
   } catch(e) {
     webllmLoading = false;
     hideModelLoadProgress();
-    notif('WebLLM failed: ' + e.message.slice(0,50), 'warn');
+    notif('WebLLM inference failed: ' + e.message.slice(0,40), 'warn');
     setCoreState('idle');
     console.error('WebLLM error:', e);
     if(e.message.toLowerCase().includes('webgpu') || e.message.toLowerCase().includes('not supported')) {
-      speak('WebGPU is not available. Try Chrome 113 or newer with hardware acceleration enabled.');
+      speak('WebGPU unavailable. Try Chrome 113+ with hardware acceleration on.');
       showWebGPUWarning();
     } else {
-      speak(`AI model failed to load. ${e.message.slice(0,60)}`);
+      speak(`AI failed: ${e.message.slice(0,60)}`);
     }
   }
 }
@@ -1253,14 +1243,13 @@ async function startCam(stream) {
 }
 
 async function initHandLandmarker(){
-  // Wait for the module script in <head> to set _mpReady
   let attempts = 0;
-  while(window._mpReady === undefined && attempts < 80){
+  while(!window._mpReady && attempts < 80){
     await new Promise(r=>setTimeout(r,200)); attempts++;
   }
   if(!window._mpReady){
     $('cam-lbl').textContent='HAND ML FAILED';
-    notif('MediaPipe failed to load','warn');
+    notif('MediaPipe did not load','warn');
     return;
   }
   try{
