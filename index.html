@@ -2,16 +2,28 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<!-- MediaPipe Tasks Vision — loaded as module, stored on window for classic script access -->
 <script type="module">
+  // esm.run is the ONLY CDN that correctly serves web-llm for browsers (proper JS content-type + CORS)
+  // <script type="module"> runs before DOMContentLoaded, stores on window for classic script to use
+  try {
+    const wl = await import('https://esm.run/@mlc-ai/web-llm');
+    window._wlCreate = wl.CreateMLCEngine || wl.CreateEngine || wl.default?.CreateMLCEngine;
+    window._wlReady  = !!window._wlCreate;
+  } catch(e) {
+    console.error('[WebLLM module]', e);
+    window._wlReady = false;
+  }
+</script>
+<script type="module">
+  // MediaPipe — same pattern, must use ESM bundle (.mjs), not the UMD (.js)
   try {
     const { HandLandmarker, FilesetResolver } =
-      await import('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs');
-    window._mpHandLandmarker  = HandLandmarker;
-    window._mpFilesetResolver = FilesetResolver;
+      await import('https://esm.run/@mediapipe/tasks-vision');
+    window._mpHL = HandLandmarker;
+    window._mpFR = FilesetResolver;
     window._mpReady = true;
   } catch(e) {
-    console.warn('MediaPipe failed:', e);
+    console.error('[MediaPipe module]', e);
     window._mpReady = false;
   }
 </script>
@@ -245,7 +257,7 @@ html,body{width:100%;height:100%;overflow:hidden;background:#000;cursor:none;
 #drag-overlay-sub{font-size:9px;letter-spacing:0.25em;color:rgba(0,216,255,0.45)}
 
 </style>
-<!-- AI runs via Ollama (localhost:11434) — no CDN module loading needed -->
+<!-- WebLLM + MediaPipe loaded via type=module scripts above -->
 </head>
 <body>
 
@@ -409,11 +421,11 @@ html,body{width:100%;height:100%;overflow:hidden;background:#000;cursor:none;
   </div>
 
   <div id="mrow">
-    <button class="mb on" data-m="llama3" data-p="ollama">LLAMA 3 ⚡</button>
-    <button class="mb" data-m="llama3.2" data-p="ollama">LLAMA 3.2</button>
-    <button class="mb" data-m="mistral" data-p="ollama">MISTRAL</button>
-    <button class="mb" data-m="phi3" data-p="ollama">PHI-3</button>
-    <button class="mb" data-m="gemma2" data-p="ollama">GEMMA 2</button>
+    <button class="mb on" data-m="Llama-3.2-1B-Instruct-q4f32_1-MLC" data-p="webllm">LLAMA 1B ⚡</button>
+    <button class="mb" data-m="Llama-3.2-3B-Instruct-q4f32_1-MLC" data-p="webllm">LLAMA 3B</button>
+    <button class="mb" data-m="Phi-3.5-mini-instruct-q4f16_1-MLC" data-p="webllm">PHI 3.5</button>
+    <button class="mb" data-m="gemma-2-2b-it-q4f32_1-MLC" data-p="webllm">GEMMA 2B</button>
+    <button class="mb" data-m="Mistral-7B-Instruct-v0.3-q4f16_1-MLC" data-p="webllm">MISTRAL 7B</button>
   </div>
 <div id="bot">
     <div class="bi">BATTERY&nbsp;
@@ -517,7 +529,7 @@ let t=0,lastT=0,fc=0,fpsTimer=0,fps=60;
 let mx=CX,my=CY,hx,hy,hvx=0,hvy=0;
 let pinching=false,speaking=false,listening=false;
 let coreState='idle',userName='USER',startT=Date.now();
-let currentModel='llama3',currentProvider='ollama';
+let currentModel='Llama-3.2-1B-Instruct-q4f32_1-MLC',currentProvider='webllm';
 let convoHistory=[],camReady=false,micReady=false,ramHist=[];
 let wakeActive=false,wakeTimer=null,WAKE_TIMEOUT=100000;
 let viewerOpen=false,viewerAnim=null;
@@ -811,23 +823,15 @@ window.onYouTubeIframeAPIReady = function(){
 
 // Search YouTube via internal (no API key) scrape approach
 async function searchYouTube(query){
-  const PIPED=[
-    'https://pipedapi.kavin.rocks',
-    'https://piped-api.garudalinux.org',
-    'https://api.piped.projectsegfau.lt',
-  ];
+  const PIPED=['https://pipedapi.kavin.rocks','https://piped-api.garudalinux.org','https://api.piped.projectsegfau.lt'];
   for(const base of PIPED){
     try{
       const r=await fetch(`${base}/search?q=${encodeURIComponent(query)}&filter=videos`,{signal:AbortSignal.timeout(5000)});
-      if(r.ok){
-        const d=await r.json();
-        const item=d.items?.find(i=>i.url?.includes('/watch'));
-        if(item){const vid=item.url.match(/v=([a-zA-Z0-9_-]{11})/)?.[1];if(vid)return{videoId:vid,title:item.title||query};}
-      }
+      if(r.ok){const d=await r.json();const item=d.items?.find(i=>i.url?.includes('/watch'));if(item){const vid=item.url.match(/v=([a-zA-Z0-9_-]{11})/)?.[1];if(vid)return{videoId:vid,title:item.title||query};}}
     }catch(e){}
   }
-  const INVIDIOUS=['https://inv.riverside.rocks','https://invidious.namazso.eu','https://vid.puffyan.us'];
-  for(const base of INVIDIOUS){
+  const INV=['https://inv.riverside.rocks','https://invidious.namazso.eu','https://vid.puffyan.us'];
+  for(const base of INV){
     try{
       const r=await fetch(`${base}/api/v1/search?q=${encodeURIComponent(query)}&type=video`,{signal:AbortSignal.timeout(5000)});
       if(r.ok){const d=await r.json();if(d[0]?.videoId)return{videoId:d[0].videoId,title:d[0].title||query};}
@@ -1025,87 +1029,66 @@ function handleCmd(raw){
 //  No server, no API key, no account
 //  Uses WebGPU. Downloads model once, cached.
 // ══════════════════════════════════════════
-// ══════════════════════════════════════════
-//  LOCAL AI — Ollama (localhost:11434)
-//  Simple fetch, no modules, no WebGPU
-//  Works from file:// and any HTTP origin
-//  Install: https://ollama.com  then: ollama pull llama3
-// ══════════════════════════════════════════
-let webllmReady = false; // kept for compatibility with boot/spoke code
-let ollamaReady = false;
-let ollamaModel = 'llama3';
+let webllmEngine = null;
+let webllmLoading = false;
+let webllmReady = false;
 
 async function initWebLLM(modelId) {
-  // modelId here is the Ollama model name from the button
-  ollamaModel = modelId;
-  showModelLoadProgress(`CHECKING OLLAMA: ${modelId.toUpperCase()}`, 0);
-  notif('CONNECTING TO LOCAL OLLAMA...');
+  if(webllmLoading) return;
+  webllmLoading = true;
+  webllmReady = false;
+
+  showModelLoadProgress(`LOADING ${modelId.split('-').slice(0,3).join(' ')}...`, 0);
+  notif('LOADING AI MODEL INTO BROWSER...');
   setCoreState('processing');
 
+  // Poll for the <script type="module"> in <head> to finish setting window._wlReady
+  // Module scripts run before DOMContentLoaded but are async — poll up to 30s
+  let attempts = 0;
+  while(window._wlReady === undefined && attempts < 150) {
+    await new Promise(r => setTimeout(r, 200)); attempts++;
+  }
+
+  if(!window._wlReady || !window._wlCreate) {
+    webllmLoading = false;
+    hideModelLoadProgress();
+    setCoreState('idle');
+    notif('WebLLM module failed — check console', 'warn');
+    speak('WebLLM failed to load. Make sure you are using Chrome with WebGPU enabled, and the page is served over HTTPS.');
+    showWebGPUWarning();
+    return;
+  }
+
   try {
-    // Ping Ollama
-    const r = await fetch('http://localhost:11434/api/tags', {signal: AbortSignal.timeout(3000)});
-    if (!r.ok) throw new Error('Ollama not running');
-    const data = await r.json();
-    const models = data.models?.map(m => m.name) || [];
-    const found = models.find(m => m.startsWith(modelId.split(':')[0]));
-
-    if (!found) {
-      hideModelLoadProgress();
-      notif(`MODEL "${modelId}" NOT FOUND IN OLLAMA`, 'warn');
-      setCoreState('idle');
-      speak(`Ollama is running but model ${modelId} is not pulled. Run: ollama pull ${modelId}`);
-      return;
-    }
-
-    ollamaModel = found;
-    ollamaReady = true;
-    webllmReady = true; // allows sendAI to proceed
+    webllmEngine = await window._wlCreate(modelId, {
+      initProgressCallback: (p) => {
+        const pct = Math.round((p.progress || 0) * 100);
+        showModelLoadProgress((p.text||'').slice(0,60) || `LOADING ${pct}%`, pct);
+      }
+    });
+    webllmReady = true;
+    webllmLoading = false;
     hideModelLoadProgress();
-    SFX.modelLoaded();
+    notif('AI ONLINE — ' + modelId.split('-').slice(0,3).join(' ').toUpperCase());
+    setCoreState('idle');
     SFX.confirm();
-    notif('AI ONLINE — OLLAMA ' + found.toUpperCase());
-    setCoreState('idle');
-    if($('mlbl')) $('mlbl').textContent = modelId.split(':')[0].toUpperCase();
-    speak(`Ollama connected. Model ${modelId} ready. At your service, ${userName}.`);
+    SFX.modelLoaded();
+    if($('mlbl')) $('mlbl').textContent = modelId.split('-')[0].toUpperCase();
+    speak(`AI model loaded. I'm ready, ${userName}.`);
   } catch(e) {
+    webllmLoading = false;
     hideModelLoadProgress();
-    ollamaReady = false;
-    webllmReady = false;
+    notif('WebLLM error: ' + e.message.slice(0,40), 'warn');
     setCoreState('idle');
-    notif('OLLAMA OFFLINE — start Ollama app', 'warn');
-    console.warn('Ollama error:', e);
-    showOllamaWarning();
-    speak(`Ollama is not running. Please start the Ollama app and ensure the model is pulled.`);
+    console.error('WebLLM:', e);
+    if(/webgpu|not supported|gpu/i.test(e.message)) {
+      speak('WebGPU unavailable. Use Chrome 113+ with hardware acceleration enabled.');
+    } else {
+      speak(`Model failed: ${e.message.slice(0,60)}`);
+    }
+    showWebGPUWarning();
   }
 }
-
-function showOllamaWarning() {
-  let w = document.getElementById('ollama-warn');
-  if(w) return;
-  w = document.createElement('div');
-  w.id = 'ollama-warn';
-  w.style.cssText = `position:fixed;top:52px;left:50%;transform:translateX(-50%);
-    z-index:100;background:rgba(0,5,15,0.97);border:1px solid rgba(255,102,0,0.5);
-    border-radius:3px;padding:14px 22px;font-family:'Share Tech Mono',monospace;
-    font-size:9px;letter-spacing:0.12em;color:rgba(255,160,60,0.9);
-    max-width:520px;text-align:center;line-height:2.2;`;
-  w.innerHTML = `<div style="color:var(--a);font-family:'Orbitron',monospace;letter-spacing:0.25em;margin-bottom:8px">⚠ OLLAMA REQUIRED</div>
-    <div>1. Install Ollama → <span style="color:#00d8ff">ollama.com</span></div>
-    <div>2. Run: <span style="color:#00d8ff">ollama pull llama3</span></div>
-    <div>3. Ensure Ollama app is running, then reload</div>
-    <div style="margin-top:10px"><span onclick="retryOllama()" style="cursor:pointer;color:#00d8ff;text-decoration:underline;margin-right:16px">RETRY</span><span onclick="this.closest('div#ollama-warn').remove()" style="cursor:pointer;color:rgba(0,216,255,0.5);text-decoration:underline">DISMISS</span></div>`;
-  document.body.appendChild(w);
-}
-
-function retryOllama() {
-  const w = document.getElementById('ollama-warn');
-  if(w) w.remove();
-  initWebLLM(ollamaModel);
-}
-
-// showWebGPUWarning kept as alias so existing code doesn't break
-function showWebGPUWarning() { showOllamaWarning(); }
 
 // Model load progress overlay
 function showModelLoadProgress(text, pct) {
@@ -1141,15 +1124,15 @@ async function sendAI(msg) {
   setCoreState('processing'); SFX.processingStart();
   convoHistory.push({role:'user', content:msg});
 
-  if(!ollamaReady) {
+  if(!webllmReady) {
     SFX.error();
-    speak(`Ollama is not connected. Please start Ollama and say Jarvis retry.`);
+    speak(`The AI model is still loading. Please wait a moment.`);
     setCoreState('idle');
     convoHistory.pop();
-    showOllamaWarning();
     return;
   }
 
+  // Build system prompt with all real stats + user info
   const mem = performance.memory;
   const conn = navigator.connection || {};
   const bat = await navigator.getBattery?.().catch(()=>null);
@@ -1167,54 +1150,42 @@ async function sendAI(msg) {
     `Camera: ${camReady?'active':'offline'}`,
     `Mic: ${micReady?'active':'offline'}`,
     `Weather: ${$('wtemp')?.textContent||'?'} ${$('wcond')?.textContent||''} in ${$('wcity')?.textContent||'?'}`,
+    `Location: ${$('wcity')?.textContent||'unknown'}`,
   ].filter(Boolean).join(', ');
-
-  const sys = `You are Jarvis, Tony Stark's AI assistant. Witty, sophisticated, dry British humour. Speak naturally — NOT robotic. Keep responses concise (2-3 sentences max). System info: [${sysInfo}]. User's name: ${userName}. If you need current web info reply ONLY: SEARCH:<query>`;
+  const sys = `You are Jarvis, Tony Stark's AI assistant. Witty, sophisticated, dry British humour. Speak naturally — NOT robotic. Keep responses concise. You have access to the user's system data: [${sysInfo}]. Use this when relevant. If you need current web info, reply ONLY: SEARCH:<query>. User's name: ${userName}.`;
 
   try {
-    const resp = await fetch('http://localhost:11434/api/chat', {
-      method: 'POST',
-      headers: {'Content-Type':'application/json'},
-      signal: AbortSignal.timeout(30000),
-      body: JSON.stringify({
-        model: ollamaModel,
-        messages: [
-          {role:'system', content: sys},
-          ...convoHistory.slice(-8)
-        ],
-        stream: false,
-        options: { temperature: 0.8, num_predict: 200 }
-      })
+    const reply = await webllmEngine.chat.completions.create({
+      messages: [
+        {role:'system', content:sys},
+        ...convoHistory.slice(-8)
+      ],
+      temperature: 0.8,
+      max_tokens: 250,
+      stream: false,
     });
 
-    if(!resp.ok) throw new Error(`Ollama HTTP ${resp.status}`);
-    const data = await resp.json();
-    let reply = (data.message?.content || '').trim();
+    let resp = reply.choices[0].message.content || '';
+    resp = resp.trim();
 
-    if(reply.startsWith('SEARCH:')) {
-      const q = reply.replace('SEARCH:','').trim();
+    if(resp.startsWith('SEARCH:')) {
+      const q = resp.replace('SEARCH:','').trim();
       const result = await webSearch(q);
       if(result) convoHistory.push({role:'assistant', content:result});
       SFX.processingEnd(); setCoreState('idle'); return;
     }
 
-    convoHistory.push({role:'assistant', content:reply});
+    convoHistory.push({role:'assistant', content:resp});
     if(convoHistory.length > 18) convoHistory = convoHistory.slice(-12);
     SFX.processingEnd();
-    speak(reply);
+    speak(resp);
 
   } catch(e) {
     SFX.error();
-    if(e.name === 'TimeoutError' || e.message.includes('fetch')) {
-      ollamaReady = false; webllmReady = false;
-      speak('Lost connection to Ollama. Please check it is still running.');
-      showOllamaWarning();
-    } else {
-      speak(`Error: ${e.message.slice(0,60)}`);
-    }
+    speak(`I encountered an error. ${e.message.slice(0,60)}`);
     convoHistory.pop();
     setTimeout(()=>setCoreState('idle'), 600);
-    console.error('Ollama error:', e);
+    console.error('WebLLM inference error:', e);
   }
 }
 
@@ -1250,12 +1221,12 @@ async function initHandLandmarker(){
   }
   if(!window._mpReady){
     $('cam-lbl').textContent='HAND ML FAILED';
-    notif('MediaPipe did not load','warn');
+    notif('MediaPipe did not load — check console','warn');
     return;
   }
   try{
-    const HandLandmarker  = window._mpHandLandmarker;
-    const FilesetResolver = window._mpFilesetResolver;
+    const HandLandmarker  = window._mpHL;
+    const FilesetResolver = window._mpFR;
     const vision = await FilesetResolver.forVisionTasks(
       'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm'
     );
@@ -1274,7 +1245,7 @@ async function initHandLandmarker(){
     $('rd-gest').textContent='MP TASKS'; $('rd-gest').style.color='var(--g)';
     notif('HAND TRACKING READY'); SFX.confirm();
   }catch(err){
-    console.error('HandLandmarker failed:',err);
+    console.error('HandLandmarker:',err);
     $('cam-lbl').textContent='HAND ML FAILED';
     notif('Hand tracking: '+err.message.slice(0,50),'warn');
   }
@@ -1676,11 +1647,12 @@ document.querySelectorAll('[data-m]').forEach(b=>{
     const newModel = b.dataset.m;
     if(newModel === currentModel) return;
     currentModel = newModel;
-    currentProvider = b.dataset.p || 'ollama';
+    currentProvider = b.dataset.p || 'webllm';
     if($('mlbl')) $('mlbl').textContent = b.textContent.replace('⚡','').trim();
     notif('SWITCHING MODEL: '+b.textContent);
     SFX.model();
-    ollamaReady = false; webllmReady = false;
+    // Reload WebLLM with new model
+    webllmEngine = null; webllmReady = false; webllmLoading = false;
     setTimeout(()=>initWebLLM(currentModel), 300);
   });
 });
@@ -1814,7 +1786,7 @@ function boot(){
     setTimeout(()=>{ initWebLLM(currentModel); }, 400);
     setTimeout(()=>{
       jVoice=findMaleVoice();
-      speak(`Welcome${userName?', '+userName:''}. Jarvis online. Connecting to Ollama.`,true);
+      speak(`Welcome${userName?', '+userName:''}. Jarvis online. Loading AI model now.`,true);
     },600);
   });
 }
@@ -1826,7 +1798,7 @@ const BOOT_MSGS = [
   'WEATHER TELEMETRY CONNECTED',
   'DISPLAY SUBSYSTEM CALIBRATED',
   'NEURAL PATHWAYS INITIALIZED',
-  'CONNECTING TO LOCAL OLLAMA...',
+  'LOADING LANGUAGE MODEL...',
   'ALL SYSTEMS NOMINAL',
 ];
 
