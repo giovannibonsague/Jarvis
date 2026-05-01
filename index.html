@@ -2,8 +2,23 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<!-- MediaPipe Tasks Vision -->
-<script src="https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.js" crossorigin="anonymous"></script></script>
+<script type="module">
+  // MediaPipe — must use .mjs ESM bundle, the UMD bundle doesn't expose globals correctly
+  try {
+    const { HandLandmarker, FilesetResolver } =
+      await import('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs');
+    window._mpHandLandmarker  = HandLandmarker;
+    window._mpFilesetResolver = FilesetResolver;
+    window._mpReady = true;
+  } catch(e) { console.warn('MediaPipe load failed:', e); window._mpReady = false; }
+
+  // WebLLM — jsDelivr ESM (only path that actually works in browser without a bundler)
+  try {
+    const webllm = await import('https://cdn.jsdelivr.net/npm/@mlc-ai/web-llm@0.2.73/lib/index.mjs');
+    window._webllmCreateEngine = webllm.CreateMLCEngine ?? webllm.CreateEngine ?? webllm.default?.CreateMLCEngine;
+    window._webllmReady = !!window._webllmCreateEngine;
+  } catch(e) { console.warn('WebLLM load failed:', e); window._webllmReady = false; }
+</script>
 <title>J.A.R.V.I.S</title>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;600;700;900&family=Share+Tech+Mono&display=swap');
@@ -234,7 +249,7 @@ html,body{width:100%;height:100%;overflow:hidden;background:#000;cursor:none;
 #drag-overlay-sub{font-size:9px;letter-spacing:0.25em;color:rgba(0,216,255,0.45)}
 
 </style>
-<script src="https://cdn.jsdelivr.net/npm/@mlc-ai/web-llm@0.2.73/lib/index.min.js" crossorigin="anonymous"></script>
+<!-- WebLLM loaded via type=module script in <head> -->
 </head>
 <body>
 
@@ -506,7 +521,7 @@ let t=0,lastT=0,fc=0,fpsTimer=0,fps=60;
 let mx=CX,my=CY,hx,hy,hvx=0,hvy=0;
 let pinching=false,speaking=false,listening=false;
 let coreState='idle',userName='USER',startT=Date.now();
-let currentModel='llama3',currentProvider='ollama';
+let currentModel='Llama-3.2-1B-Instruct-q4f32_1-MLC',currentProvider='webllm';
 let convoHistory=[],camReady=false,micReady=false,ramHist=[];
 let wakeActive=false,wakeTimer=null,WAKE_TIMEOUT=100000;
 let viewerOpen=false,viewerAnim=null;
@@ -515,10 +530,10 @@ let mesh3d={verts:[],faces:[],normals:[]};
 let recog=null;
 
 // ── HAND TRACKING STATE ──
-// Separate from mouse — only set mx/my when hand is ACTUALLY detected
 let handDetected=false;
-let fingerTips=[]; // array of {x,y} for overlay drawing
-let camMx=CX,camMy=CY; // camera-derived position, only used when hand found
+let handLandmarks=[];
+let fingerTips=[];
+let camMx=CX,camMy=CY;
 
 // ── SFX ──
 let AC;
@@ -799,38 +814,44 @@ window.onYouTubeIframeAPIReady = function(){
 };
 
 // Search YouTube via internal (no API key) scrape approach
-// Uses a CORS proxy to get YT search results
+// Search YouTube via public APIs — no key required
 async function searchYouTube(query){
-  // Use YouTube's own search suggestions API — no key, no CORS issues
-  // Returns video ID by encoding the query as a YouTube search URL
-  // We load it via the YouTube IFrame player search feature
-  // Fallback: use YouTube search embed directly
-  try{
-    // Try youtube-search via a public CORS-friendly proxy
-    const url = `https://yt.lemnoslife.com/noKey/search?part=snippet&q=${encodeURIComponent(query)}&type=video&maxResults=1`;
-    const r = await fetch(url, {signal:AbortSignal.timeout(5000)});
-    if(r.ok){
-      const d = await r.json();
-      if(d.items?.[0]){
-        return {
-          videoId: d.items[0].id.videoId,
-          title: d.items[0].snippet.title
-        };
+  // Try Piped API instances (CORS-open, no key)
+  const PIPED = [
+    'https://pipedapi.kavin.rocks',
+    'https://piped-api.garudalinux.org',
+    'https://api.piped.projectsegfau.lt',
+  ];
+  for(const base of PIPED){
+    try{
+      const r = await fetch(`${base}/search?q=${encodeURIComponent(query)}&filter=videos`,
+        {signal:AbortSignal.timeout(5000)});
+      if(r.ok){
+        const d = await r.json();
+        const item = d.items?.find(i=>i.url?.includes('/watch'));
+        if(item){
+          const vid = item.url.match(/v=([a-zA-Z0-9_-]{11})/)?.[1];
+          if(vid) return {videoId:vid, title:item.title||query};
+        }
       }
-    }
-  }catch(e){}
-
-  // Fallback: use DuckDuckGo to find YouTube video ID
-  try{
-    const r = await fetch(`https://api.duckduckgo.com/?q=${encodeURIComponent(query+' site:youtube.com')}&format=json&no_redirect=1`,
-      {signal:AbortSignal.timeout(4000)});
-    const d = await r.json();
-    // Extract video ID from any YouTube URL in results
-    const allText = JSON.stringify(d);
-    const match = allText.match(/youtube\.com\/watch\?v=([a-zA-Z0-9_-]{11})/);
-    if(match) return {videoId: match[1], title: query};
-  }catch(e){}
-
+    }catch(e){}
+  }
+  // Try Invidious instances
+  const INVIDIOUS = [
+    'https://inv.riverside.rocks',
+    'https://invidious.namazso.eu',
+    'https://vid.puffyan.us',
+  ];
+  for(const base of INVIDIOUS){
+    try{
+      const r = await fetch(`${base}/api/v1/search?q=${encodeURIComponent(query)}&type=video`,
+        {signal:AbortSignal.timeout(5000)});
+      if(r.ok){
+        const d = await r.json();
+        if(d[0]?.videoId) return {videoId:d[0].videoId, title:d[0].title||query};
+      }
+    }catch(e){}
+  }
   return null;
 }
 
@@ -865,11 +886,15 @@ async function playMusic(query){
     const div = document.createElement('div'); div.id='yt-player-div'; wrap.innerHTML=''; wrap.appendChild(div);
     ytIframe = new YT.Player('yt-player-div',{
       videoId: vid, width:1, height:1,
-      playerVars:{autoplay:1,controls:0,playsinline:1},
+      playerVars:{autoplay:1,controls:0,playsinline:1,mute:1},
       events:{
         onReady: e => {
-          e.target.setVolume(Math.round(($('vol-sl').value||0.8)*100));
           e.target.playVideo();
+          // Unmute after brief delay — satisfies browser autoplay policy
+          setTimeout(()=>{
+            e.target.unMute();
+            e.target.setVolume(Math.round(($('vol-sl').value||0.8)*100));
+          }, 800);
           startProgressTracking();
           setCoreState('active');
           setTimeout(()=>setCoreState('idle'),1000);
@@ -1027,10 +1052,6 @@ let webllmEngine = null;
 let webllmLoading = false;
 let webllmReady = false;
 
-// WebLLM CDN
-// WebLLM loaded via <head> script tag
-
-// Load WebLLM as ES module
 async function initWebLLM(modelId) {
   if(webllmLoading) return;
   webllmLoading = true;
@@ -1040,12 +1061,24 @@ async function initWebLLM(modelId) {
   notif('LOADING AI MODEL INTO BROWSER...');
   setCoreState('processing');
 
-  try {
-    // webllm loaded from CDN script tag
-    const CreateMLCEngine = window.webllm?.CreateMLCEngine;
-    if(!CreateMLCEngine) throw new Error('WebLLM not loaded from CDN');
+  // Wait for the module script in <head> to finish loading WebLLM
+  let attempts = 0;
+  while(window._webllmReady === undefined && attempts < 100) {
+    await new Promise(r => setTimeout(r, 200)); attempts++;
+  }
 
-    webllmEngine = await CreateMLCEngine(modelId, {
+  if(!window._webllmReady || !window._webllmCreateEngine) {
+    webllmLoading = false;
+    hideModelLoadProgress();
+    notif('WebLLM module failed to load', 'warn');
+    setCoreState('idle');
+    speak('WebLLM failed to load. Make sure you are using Chrome 113 or newer with WebGPU enabled.');
+    showWebGPUWarning();
+    return;
+  }
+
+  try {
+    webllmEngine = await window._webllmCreateEngine(modelId, {
       initProgressCallback: (progress) => {
         const pct = Math.round((progress.progress || 0) * 100);
         const text = progress.text || '';
@@ -1059,6 +1092,7 @@ async function initWebLLM(modelId) {
     notif('AI ONLINE — ' + modelId.split('-').slice(0,3).join(' ').toUpperCase());
     setCoreState('idle');
     SFX.confirm();
+    SFX.modelLoaded();
     if($('mlbl')) $('mlbl').textContent = modelId.split('-')[0].toUpperCase();
     speak(`AI model loaded. I'm ready, ${userName}.`);
   } catch(e) {
@@ -1067,10 +1101,11 @@ async function initWebLLM(modelId) {
     notif('WebLLM failed: ' + e.message.slice(0,50), 'warn');
     setCoreState('idle');
     console.error('WebLLM error:', e);
-    // If WebGPU not supported
-    if(e.message.includes('WebGPU') || e.message.includes('webgpu')) {
-      speak('WebGPU is not available in this browser. Try Chrome 113 or newer.');
+    if(e.message.toLowerCase().includes('webgpu') || e.message.toLowerCase().includes('not supported')) {
+      speak('WebGPU is not available. Try Chrome 113 or newer with hardware acceleration enabled.');
       showWebGPUWarning();
+    } else {
+      speak(`AI model failed to load. ${e.message.slice(0,60)}`);
     }
   }
 }
@@ -1218,15 +1253,19 @@ async function startCam(stream) {
 }
 
 async function initHandLandmarker(){
-  // Poll for MediaPipe bundle to finish loading (async CDN)
+  // Wait for the module script in <head> to set _mpReady
   let attempts = 0;
-  while(!window.mpTasksVision && !window.HandLandmarker && attempts < 50){
+  while(window._mpReady === undefined && attempts < 80){
     await new Promise(r=>setTimeout(r,200)); attempts++;
   }
+  if(!window._mpReady){
+    $('cam-lbl').textContent='HAND ML FAILED';
+    notif('MediaPipe failed to load','warn');
+    return;
+  }
   try{
-    const lib = window.mpTasksVision || window;
-    const {HandLandmarker, FilesetResolver} = lib;
-    if(!HandLandmarker) throw new Error('HandLandmarker not exported');
+    const HandLandmarker  = window._mpHandLandmarker;
+    const FilesetResolver = window._mpFilesetResolver;
     const vision = await FilesetResolver.forVisionTasks(
       'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm'
     );
