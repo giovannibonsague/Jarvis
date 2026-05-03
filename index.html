@@ -964,70 +964,49 @@ async function webSearch(query){
 function handleCmd(raw){
   const m = raw.toLowerCase().trim();
 
-  // Music controls
-  if(m.match(/pause.*music|music.*pause|stop.*music/)){
-    if(ytIframe) ytIframe.pauseVideo(); speak('Paused.'); return;
-  }
-  if(m.match(/resume.*music|play.*music$|unpause/)){
-    if(ytIframe) ytIframe.playVideo(); speak('Resuming.'); return;
-  }
-  if(m.match(/music.*(back|rewind|backward).*(10|ten)|back.*10.*second/)){
-    if(ytIframe) ytIframe.seekTo(Math.max(0,(ytIframe.getCurrentTime()||0)-10),true);
-    speak('Back ten seconds.'); return;
-  }
-  if(m.match(/music.*(forward|skip|ahead).*(10|ten)|forward.*10.*second/)){
-    if(ytIframe) ytIframe.seekTo((ytIframe.getCurrentTime()||0)+10,true);
-    speak('Forward ten seconds.'); return;
-  }
-  if(m.match(/music.*louder|volume.*(up|louder)/)){
-    const v = Math.min(100,(($('vol-sl').value||0.8)*100)+15);
-    $('vol-sl').value=v/100; if(ytIframe)ytIframe.setVolume(v); speak('Volume up.'); return;
-  }
-  if(m.match(/music.*quieter|volume.*(down|lower|quiet)/)){
-    const v = Math.max(0,(($('vol-sl').value||0.8)*100)-15);
-    $('vol-sl').value=v/100; if(ytIframe)ytIframe.setVolume(v); speak('Volume down.'); return;
-  }
-  if(m.match(/stop.*music|close.*music|music.*stop/)){
-    $('m-stop').click(); speak('Music stopped.'); return;
-  }
+  // ── MUSIC: play ──
+  const playM = m.match(/^(?:play(?:\s+me|\s+some|\s+a)?|put\s+on|i\s+want\s+to\s+hear|listen\s+to|start\s+playing|can\s+you\s+play)\s+(.+)/i);
+  if(playM){ const q=playM[1].trim().replace(/^(the\s+song\s+|the\s+track\s+|music\s+by\s+)/i,''); playMusic(q); return; }
 
-  // Play song
-  const playM = m.match(/^(?:play|put on|play me|i want to hear|listen to)\s+(.+)/i);
-  if(playM){ playMusic(playM[1].trim()); return; }
+  // ── MUSIC: controls ──
+  if(m.match(/\b(pause|stop\s+playing|mute\s+music)\b/) && !m.match(/stop.*and/i)){ if(ytIframe)ytIframe.pauseVideo(); speak('Paused.'); return; }
+  if(m.match(/\b(resume|unpause|continue\s+playing|play\s+music|keep\s+playing)\b/)){ if(ytIframe)ytIframe.playVideo(); speak('Resuming.'); return; }
+  if(m.match(/\b(stop\s+music|close\s+music|turn\s+off\s+(the\s+)?music|no\s+music|end\s+music)\b/)){ if($('m-stop'))$('m-stop').click(); speak('Music stopped.'); return; }
+  if(m.match(/volume\s*(up|louder|higher|increase)|louder|turn\s+it\s+up/)){ const v=Math.min(100,(($('vol-sl')?.value||0.8)*100)+15); if($('vol-sl'))$('vol-sl').value=v/100; if(ytIframe&&ytIframe.setVolume)ytIframe.setVolume(v); speak('Volume up.'); return; }
+  if(m.match(/volume\s*(down|lower|quieter|decrease)|quieter|turn\s+it\s+down|too\s+loud/)){ const v=Math.max(0,(($('vol-sl')?.value||0.8)*100)-15); if($('vol-sl'))$('vol-sl').value=v/100; if(ytIframe&&ytIframe.setVolume)ytIframe.setVolume(v); speak('Volume down.'); return; }
 
-  // Search (speaks result, no tab)
-  const searchM = m.match(/^(?:search for|look up|search|find|what is|who is|tell me about|what are|how do|why is|when did|where is)\s+(.+)/i);
+  // ── 3D FILE ──
+  if(m.match(/(?:open|upload|load|show|bring\s+up)(?:\s+a|\s+the|\s+my)?\s*(?:3d|stl|obj|ply|fbx|three.?d|model|mesh|file)/i)){ openFilePrompt(); return; }
+  if(m.match(/(?:close|exit|hide|remove|dismiss|shut)(?:\s+the)?\s*(?:3d|viewer|model|mesh|object|file)/i)){ if(viewerOpen){viewerOpen=false;$('viewer-wrap').classList.remove('on');speak('3D viewer closed.');}else speak('No 3D file is open.'); return; }
+
+  // ── PROFILE ──
+  if(m.match(/(?:open|show|edit|update)\s+(?:my\s+)?(?:profile|info|information|about\s+me)|my\s+profile/i)){ openProfile(); speak('Opening your profile.'); return; }
+
+  // ── TIME / DATE ──
+  if(m.match(/what.?s?\s+the\s+time|what\s+time\s+is\s+it/i)){ speak(`It's ${new Date().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'})}.`); return; }
+  if(m.match(/what.?s?\s+the\s+date|what\s+day\s+is\s+it|today.?s\s+date/i)){ speak(`Today is ${new Date().toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric'})}.`); return; }
+
+  // ── WEATHER ──
+  if(m.match(/\bweather\b|how.?s\s+outside|temperature\s+outside/i)){ const t=$('wtemp')?.textContent,cn=$('wcond')?.textContent,cy=$('wcity')?.textContent; speak(cn?`Currently ${t} and ${cn} in ${cy}.`:`Weather's still loading.`); return; }
+
+  // ── STATUS ──
+  if(m.match(/\bsystem\s+status\b|\bdiagnostics\b|\ball\s+systems\b|\brun\s+a\s+check\b/i)){ speak(`All systems nominal. Camera ${camReady?'active':'offline'}, mic ${micReady?'live':'offline'}, AI ${webllmReady?'ready':'loading'}.`); return; }
+
+  // ── SLEEP ──
+  if(m.match(/\bgo\s+to\s+sleep\b|\bsleep\s+mode\b|\bstandby\b/i)){ deactivateWake(); speak('Going to standby.'); return; }
+  if(m.match(/\bshut\s+down\b/i)){ speak(`I'd rather stay online, if it's all the same to you.`); return; }
+
+  // ── GREETINGS ──
+  if(m.match(/^(hello|hi|hey|good\s+(morning|evening|afternoon)|what.?s\s+up)\.?$/i)){ speak([`At your service, ${userName}.`,`What can I do for you?`,`Online and ready.`][Math.floor(Math.random()*3)]); return; }
+
+  // ── HOW ARE YOU ──
+  if(m.match(/^how\s+are\s+you\.?$/i)){ speak(`All systems nominal. Ready to assist.`); return; }
+
+  // ── EXPLICIT SEARCH ──
+  const searchM = m.match(/^(?:search\s+for|look\s+up|google|bing\s+for|search)\s+(.+)/i);
   if(searchM){ webSearch(searchM[1].trim()); return; }
 
-  // 3D file
-  if(m.match(/(?:open|show|edit|update|my)\s*(?:profile|info|information|about me|personal)/i)){ openProfile(); speak('Opening your profile.'); return; }
-  if(m.match(/(?:close|exit|hide|remove|dismiss|shut)(?:\s+the)?\s*(?:3d|viewer|model|mesh|file|object)/i)){
-    if(viewerOpen){
-      viewerOpen=false;
-      $('viewer-wrap').classList.remove('on');
-      if(viewerAnim)cancelAnimationFrame(viewerAnim);
-      speak('3D viewer closed.');
-    } else {
-      speak('No 3D file is currently open.');
-    }
-    return;
-  }
-
-  // Time / date
-  if(m.match(/what.?s the time|what time/)){ speak(`It's ${new Date().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'})}.`); return; }
-  if(m.match(/what.?s the date|what day/)){ speak(`Today is ${new Date().toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric'})}.`); return; }
-
-  // Status
-  if(m.match(/status|how are you|systems/)){ speak(`All systems nominal. Gesture tracking ${camReady?'active':'mouse fallback'}, mic live.`); return; }
-
-  // Weather
-  if(m.match(/weather/)){ const t=$('wtemp').textContent,cn=$('wcond').textContent,cy=$('wcity').textContent; speak(cn?`Currently ${t} and ${cn} in ${cy}.`:`Weather loading.`); return; }
-
-  // Sleep
-  if(m.match(/go to sleep|sleep mode|standby/)){ deactivateWake(); speak('Going to standby.'); return; }
-  if(m.match(/shut down/)){ speak(`I'd rather stay online.`); return; }
-  if(m.match(/hello|^hi$|^hey$/)){ speak([`At your service, ${userName}.`,`What can I do for you?`,`Online and ready.`][Math.floor(Math.random()*3)]); return; }
-
+  // ── Everything else → AI ──
   sendAI(raw);
 }
 
@@ -1163,6 +1142,12 @@ function hideModelLoadProgress() {
 }
 
 async function sendAI(msg) {
+  // Hard-block anything that looks like a command — should have been caught by handleCmd
+  const guard = msg.toLowerCase().trim();
+  if(guard.match(/^(play|pause|stop|resume|unpause|volume|open|close|load|upload|search for|look up|google|what time|what date|what day|weather|status|diagnostics|standby|sleep mode|shut down|go to sleep|my profile|open profile)\b/i)){
+    handleCmd(msg); return;
+  }
+
   setCoreState('processing'); SFX.processingStart();
 
   // Topic-change detection: if the new message shares almost no words with recent history,
