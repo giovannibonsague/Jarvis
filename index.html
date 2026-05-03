@@ -977,7 +977,7 @@ function handleCmd(raw){
   if(searchM){ webSearch(searchM[1].trim()); return; }
 
   // 3D file
-  if(m.match(/open.*(3d|stl|obj|ply|fbx|file|model|mesh)/i)){ openFilePrompt(); return; }
+  if(m.match(/(?:open|upload|load|show|bring up|give me)(?:\s+a|\s+the|\s+my)?\s*(?:3d|stl|obj|ply|fbx|three.?d|model|mesh|file)/i)){ openFilePrompt(); return; }
 
   // Time / date
   if(m.match(/what.?s the time|what time/)){ speak(`It's ${new Date().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'})}.`); return; }
@@ -1400,8 +1400,65 @@ function onGrab(on){
 // ── 3D VIEWER ──
 function openFilePrompt(){
   SFX.fileOpen();
-  // Opens the OS native file explorer — no "fake" dialog
-  $('file-input').click();
+  speak('Click the button to choose your file.');
+
+  // Browsers block programmatic file picker opens outside a direct user gesture.
+  // Solution: show a JARVIS-styled overlay with a real button — clicking THAT is a genuine gesture.
+  let overlay = document.getElementById('file-prompt-overlay');
+  if(overlay) { overlay.remove(); }
+
+  overlay = document.createElement('div');
+  overlay.id = 'file-prompt-overlay';
+  overlay.style.cssText = `
+    position:fixed;inset:0;z-index:200;display:flex;align-items:center;justify-content:center;
+    background:rgba(0,3,12,0.85);backdrop-filter:blur(4px);`;
+
+  overlay.innerHTML = `
+    <div style="border:1px solid rgba(0,216,255,0.35);background:rgba(0,5,18,0.97);
+      border-radius:4px;padding:32px 44px;text-align:center;font-family:'Share Tech Mono',monospace;
+      box-shadow:0 0 40px rgba(0,216,255,0.08);">
+      <div style="font-family:'Orbitron',monospace;font-size:11px;letter-spacing:0.3em;
+        color:#00d8ff;margin-bottom:6px;">◈ 3D FILE LOADER</div>
+      <div style="font-size:8px;letter-spacing:0.18em;color:rgba(0,216,255,0.4);margin-bottom:26px;">
+        STL · OBJ · PLY · FBX · 3DS
+      </div>
+      <button id="file-prompt-btn" style="
+        font-family:'Orbitron',monospace;font-size:9px;letter-spacing:0.25em;
+        color:#00d8ff;border:1px solid rgba(0,216,255,0.5);background:rgba(0,216,255,0.06);
+        padding:10px 28px;cursor:pointer;border-radius:2px;margin-bottom:16px;display:block;width:100%;
+        transition:background 0.2s;">
+        ▸ SELECT FILE
+      </button>
+      <div id="file-prompt-cancel" style="font-size:8px;letter-spacing:0.2em;
+        color:rgba(0,216,255,0.3);cursor:pointer;text-decoration:underline;">CANCEL</div>
+      <input id="file-input-overlay" type="file" accept=".stl,.obj,.ply,.fbx,.3ds" style="display:none">
+    </div>`;
+
+  document.body.appendChild(overlay);
+
+  const btn  = document.getElementById('file-prompt-btn');
+  const inp  = document.getElementById('file-input-overlay');
+  const cancel = document.getElementById('file-prompt-cancel');
+
+  // Button click IS a user gesture — file picker opens reliably
+  btn.addEventListener('click', () => inp.click());
+  btn.addEventListener('mouseover', () => btn.style.background='rgba(0,216,255,0.12)');
+  btn.addEventListener('mouseout',  () => btn.style.background='rgba(0,216,255,0.06)');
+
+  inp.addEventListener('change', function(e){
+    overlay.remove();
+    if(e.target.files[0]) loadFile(e.target.files[0]);
+  });
+
+  cancel.addEventListener('click', () => {
+    overlay.remove();
+    speak('File selection cancelled.');
+  });
+
+  // Also close on backdrop click
+  overlay.addEventListener('click', (e) => {
+    if(e.target === overlay) { overlay.remove(); speak('File selection cancelled.'); }
+  });
 }
 
 function loadFile(file){
