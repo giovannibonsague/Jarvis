@@ -425,7 +425,7 @@ html,body{width:100%;height:100%;overflow:hidden;background:#000;cursor:none;
 
 
 <!-- 3D VIEWER -->
-<div id="viewer-wrap" style="position:fixed;inset:0;z-index:40;display:none;background:rgba(0,3,12,0.97)">
+<div id="viewer-wrap">
   <canvas id="viewer-cv" style="position:absolute;inset:0;width:100%;height:100%"></canvas>
   <button id="viewer-close" style="position:absolute;top:14px;right:18px;font-family:'Orbitron',monospace;font-size:9px;letter-spacing:0.25em;color:#00d8ff;border:1px solid rgba(0,216,255,0.3);background:transparent;cursor:pointer;padding:5px 12px;border-radius:2px;z-index:41">✕ CLOSE 3D</button>
   <div id="viewer-info" style="position:absolute;top:14px;left:18px;font-size:9px;letter-spacing:0.11em;color:rgba(0,216,255,0.48);line-height:2.2;z-index:41">
@@ -1235,8 +1235,7 @@ Be efficient, intelligent, and reliable.
 //  Single WASM bundle, official Google lib
 // ══════════════════════════════════════════
 let handLandmarker = null, handTrackerReady = false;
-// handDetected = false, handLandmarks = [];
-let prevGest = 'none', gestCD = 0, handConf = 0, handStr = 'NO HAND';
+let handConf = 0, handStr = 'NO HAND';
 let lastVideoTime = -1;
 
 const HAND_CONN = [[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],
@@ -1288,7 +1287,7 @@ async function initHandLandmarker(){
         modelAssetPath:'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task',
         delegate:'GPU'
       },
-      runningMode:'VIDEO', numHands:1,
+      runningMode:'VIDEO', numHands:2,
       minHandDetectionConfidence:0.55,
       minHandPresenceConfidence:0.55,
       minTrackingConfidence:0.5
@@ -1317,78 +1316,165 @@ function startHandLoop(){
   loop();
 }
 
+// Swipe tracking state
+let swipeHistory = []; // [{x,y,t}] palm positions over time
+let lastSwipeT = 0;
+const SWIPE_COOLDOWN = 700; // ms between swipes
+let pinchFrames = 0;        // frames thumb+index have been close
+let unpinchFrames = 0;      // frames they've been apart
+const PINCH_FRAMES_ON  = 4; // must hold close this many frames to trigger pinch
+const PINCH_FRAMES_OFF = 3; // must hold apart this many frames to release
+
 function processHandResults(res){
   const ov=$('cam-ov');
   if(!ov) return;
   const oc=ov.getContext('2d');
   ov.width=130; ov.height=98;
+  oc.clearRect(0,0,130,98);
+
   if(!res?.landmarks?.length){
     handDetected=false; handStr='NO HAND'; handConf=0; handLandmarks=[];
+    pinchFrames=0; unpinchFrames=0; swipeHistory=[];
     if($('rd-hand'))$('rd-hand').textContent='--';
     if($('br-gest'))$('br-gest').textContent='--';
     if($('br-conf'))$('br-conf').textContent='0%';
     return;
   }
+
   handDetected=true;
-  const lm=res.landmarks[0];
-  handLandmarks=lm;
-  handConf=Math.round((res.handednesses?.[0]?.[0]?.score||0.9)*100);
+  const numHands=res.landmarks.length;
 
-  // Map index tip to cursor — mirrored
-  const tip8=lm[8];
-  mx=(1-tip8.x)*(W-400)+200;
-  my=tip8.y*(H-140)+60;
+  // ── Process each hand ──
+  for(let h=0;h<numHands;h++){
+    const lm=res.landmarks[h];
+    const handedness=res.handednesses?.[h]?.[0]?.categoryName||'Unknown';
+    const isPrimary=(h===0);
 
-  // Gesture detection
-  const handSz=Math.hypot(lm[0].x-lm[5].x,lm[0].y-lm[5].y)||0.1;
-  const thr=handSz*0.35;
-  const idxUp=lm[8].y<lm[5].y-thr;
-  const midUp=lm[12].y<lm[9].y-thr;
-  const rngUp=lm[16].y<lm[13].y-thr;
-  const pkyUp=lm[20].y<lm[17].y-thr;
-  const nUp=[idxUp,midUp,rngUp,pkyUp].filter(Boolean).length;
-  const pinchD=Math.hypot(lm[4].x-lm[8].x,lm[4].y-lm[8].y);
-  const isPinch=pinchD/handSz<0.5;
-  const isOpen=nUp>=3&&!isPinch;
-  const isPoint=idxUp&&!midUp&&!rngUp&&!pkyUp;
-  const isFist=nUp===0&&!isPinch;
-  const g=isPinch?'pinch':isOpen?'open':isPoint?'point':isFist?'fist':'partial';
-  handStr=isPinch?'PINCH':isOpen?'OPEN PALM':isPoint?'POINT ☝':isFist?'FIST':'HAND';
+    if(isPrimary){
+      handLandmarks=lm;
+      handConf=Math.round((res.handednesses?.[0]?.[0]?.score||0.9)*100);
+      // Drive cursor from primary hand index tip
+      const tip8=lm[8];
+      mx=(1-tip8.x)*(W-400)+200;
+      my=tip8.y*(H-140)+60;
+    }
 
-  if(g!==prevGest&&gestCD<=0){gestCD=5;prevGest=g;onGrab(g==='pinch'||g==='fist');}
-  if(gestCD>0)gestCD--;
+    // ── Gesture detection ──
+    const handSz=Math.hypot(lm[0].x-lm[5].x,lm[0].y-lm[5].y)||0.1;
+    const thr=handSz*0.35;
+    const idxUp=lm[8].y<lm[5].y-thr;
+    const midUp=lm[12].y<lm[9].y-thr;
+    const rngUp=lm[16].y<lm[13].y-thr;
+    const pkyUp=lm[20].y<lm[17].y-thr;
+    const nUp=[idxUp,midUp,rngUp,pkyUp].filter(Boolean).length;
 
-  if($('rd-hand'))$('rd-hand').textContent=handStr;
-  if($('br-gest'))$('br-gest').textContent=handStr;
-  if($('br-conf'))$('br-conf').textContent=handConf+'%';
+    // Tighter pinch: distance must be < 28% of hand size (was 50%) AND held for N frames
+    const pinchD=Math.hypot(lm[4].x-lm[8].x,lm[4].y-lm[8].y);
+    const rawPinch=pinchD/handSz<0.28;
 
-  // Draw skeleton
-  const vid=$('cam-feed');
-  HAND_CONN.forEach(([a,b])=>{
-    oc.strokeStyle=isPinch?'rgba(0,255,136,0.65)':'rgba(0,216,255,0.45)';
-    oc.lineWidth=0.8;
-    oc.beginPath();
-    oc.moveTo((1-lm[a].x)*130,lm[a].y*98);
-    oc.lineTo((1-lm[b].x)*130,lm[b].y*98);
-    oc.stroke();
-  });
-  lm.forEach((p,i)=>{
-    const isTip=[4,8,12,16,20].includes(i);
-    oc.beginPath();
-    oc.arc((1-p.x)*130,p.y*98,isTip?3.5:i===0?3:1.8,0,Math.PI*2);
-    oc.fillStyle=isTip?(isPinch?'#00ff88':'rgba(0,255,136,0.9)'):i===0?'rgba(255,102,0,0.9)':'rgba(0,216,255,0.75)';
-    oc.fill();
-  });
-  if(isPinch){
-    oc.strokeStyle='#00ff88'; oc.lineWidth=2;
-    oc.beginPath();
-    oc.moveTo((1-lm[4].x)*130,lm[4].y*98);
-    oc.lineTo((1-lm[8].x)*130,lm[8].y*98);
-    oc.stroke();
+    if(isPrimary){
+      if(rawPinch){ pinchFrames++; unpinchFrames=0; }
+      else        { unpinchFrames++; pinchFrames=0; }
+      const isPinch = pinchFrames >= PINCH_FRAMES_ON;
+      const wasUnpinch = unpinchFrames >= PINCH_FRAMES_OFF;
+
+      if(isPinch && !pinching) onGrab(true);
+      else if(wasUnpinch && pinching) onGrab(false);
+
+      const isOpen=nUp>=3&&!isPinch;
+      const isPoint=idxUp&&!midUp&&!rngUp&&!pkyUp;
+      const isFist=nUp===0&&!isPinch;
+      const g=isPinch?'pinch':isOpen?'open':isPoint?'point':isFist?'fist':'partial';
+      handStr=isPinch?'PINCH':isOpen?'OPEN PALM':isPoint?'POINT ☝':isFist?'FIST':'HAND';
+
+      // ── Swipe detection — track palm (lm[0]) position ──
+      const now=performance.now();
+      const palmX=(1-lm[0].x); // 0-1 mirrored
+      const palmY=lm[0].y;
+
+      swipeHistory.push({x:palmX,y:palmY,t:now});
+      // Keep only last 400ms of history
+      swipeHistory=swipeHistory.filter(p=>now-p.t<400);
+
+      if(swipeHistory.length>=6&&!isPinch&&now-lastSwipeT>SWIPE_COOLDOWN){
+        const first=swipeHistory[0];
+        const last=swipeHistory[swipeHistory.length-1];
+        const dx=last.x-first.x;
+        const dy=last.y-first.y;
+        const dist=Math.hypot(dx,dy);
+        const dt=(last.t-first.t);
+        const speed=dist/dt; // units/ms — fast enough to be intentional
+
+        if(dist>0.18&&speed>0.0006){
+          const angle=Math.atan2(dy,dx)*180/Math.PI;
+          let swipeDir=null;
+          if(angle>-45&&angle<=45)       swipeDir='right';
+          else if(angle>45&&angle<=135)  swipeDir='down';
+          else if(angle<-45&&angle>=-135)swipeDir='up';
+          else                            swipeDir='left';
+
+          lastSwipeT=now;
+          swipeHistory=[];
+          onSwipe(swipeDir);
+        }
+      }
+
+      if($('rd-hand'))$('rd-hand').textContent=handStr+(numHands>1?' + HAND 2':'');
+      if($('br-gest'))$('br-gest').textContent=handStr;
+      if($('br-conf'))$('br-conf').textContent=handConf+'%';
+    }
+
+    // ── Draw skeleton for this hand ──
+    const isPinchDraw=isPrimary?(pinchFrames>=PINCH_FRAMES_ON):false;
+    const handColor=h===0?'rgba(0,216,255,0.55)':'rgba(255,160,0,0.55)';
+    const tipColor =h===0?(isPinchDraw?'#00ff88':'rgba(0,255,136,0.9)'):'rgba(255,180,0,0.9)';
+
+    HAND_CONN.forEach(([a,b])=>{
+      oc.strokeStyle=isPinchDraw?'rgba(0,255,136,0.65)':handColor;
+      oc.lineWidth=0.8;
+      oc.beginPath();
+      oc.moveTo((1-lm[a].x)*130,lm[a].y*98);
+      oc.lineTo((1-lm[b].x)*130,lm[b].y*98);
+      oc.stroke();
+    });
+    lm.forEach((p,i)=>{
+      const isTip=[4,8,12,16,20].includes(i);
+      oc.beginPath();
+      oc.arc((1-p.x)*130,p.y*98,isTip?3.5:i===0?3:1.8,0,Math.PI*2);
+      oc.fillStyle=isTip?tipColor:i===0?'rgba(255,102,0,0.9)':'rgba(0,216,255,0.75)';
+      oc.fill();
+    });
+
+    // Label hand
+    const wristX=(1-lm[0].x)*130, wristY=lm[0].y*98;
+    oc.fillStyle=h===0?'rgba(0,216,255,0.6)':'rgba(255,160,0,0.6)';
+    oc.font='bold 6px monospace';
+    oc.fillText(h===0?'H1':'H2', wristX-6, Math.min(wristY+10,95));
   }
-  oc.fillStyle=isPinch?'#00ff88':'rgba(0,216,255,0.75)';
+
+  // Show primary gesture label
+  const isPinchDraw=pinchFrames>=PINCH_FRAMES_ON;
+  oc.fillStyle=isPinchDraw?'#00ff88':'rgba(0,216,255,0.75)';
   oc.font='bold 7px monospace';
   oc.fillText(handStr,3,94);
+}
+
+function onSwipe(dir){
+  SFX.confirm();
+  notif('SWIPE ' + dir.toUpperCase());
+  // In 3D viewer: swipe rotates the model
+  if(viewerOpen){
+    if(dir==='left')  viewRotY -= 0.6;
+    if(dir==='right') viewRotY += 0.6;
+    if(dir==='up')    viewRotX -= 0.4;
+    if(dir==='down')  viewRotX += 0.4;
+    return;
+  }
+  // Outside viewer: trigger mapped actions
+  if(dir==='left')  speak('Swiped left.');
+  if(dir==='right') speak('Swiped right.');
+  if(dir==='up')    speak('Swiped up.');
+  if(dir==='down')  speak('Swiped down.');
 }
 
 function onGrab(on){
