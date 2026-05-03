@@ -181,9 +181,9 @@ html,body{width:100%;height:100%;overflow:hidden;background:#000;cursor:none;
   position:absolute;right:-3px;top:50%;transform:translateY(-50%)}
 
 /* 3D VIEWER */
-#viewer-wrap{position:fixed;inset:0;z-index:40;display:none;background:rgba(0,2,10,0.96)}
+#viewer-wrap{position:fixed;inset:0;z-index:10;display:none;pointer-events:none}
 #viewer-wrap.on{display:block}
-#viewer-cv{position:absolute;inset:0;width:100%;height:100%}
+#viewer-wrap button,#viewer-wrap #viewer-info{pointer-events:all}
 #v-close{position:absolute;top:14px;right:18px;font-family:var(--fo);font-size:9px;
   letter-spacing:0.25em;color:var(--c);border:1px solid rgba(0,216,255,0.3);
   background:transparent;cursor:pointer;padding:5px 12px;border-radius:2px;z-index:41;pointer-events:auto}
@@ -424,16 +424,15 @@ html,body{width:100%;height:100%;overflow:hidden;background:#000;cursor:none;
 
 
 
-<!-- 3D VIEWER -->
+<!-- 3D VIEWER HUD — overlaid on top of main canvas, no separate canvas needed -->
 <div id="viewer-wrap">
-  <canvas id="viewer-cv" style="position:absolute;inset:0;width:100%;height:100%"></canvas>
   <button id="viewer-close" style="position:absolute;top:14px;right:18px;font-family:'Orbitron',monospace;font-size:9px;letter-spacing:0.25em;color:#00d8ff;border:1px solid rgba(0,216,255,0.3);background:transparent;cursor:pointer;padding:5px 12px;border-radius:2px;z-index:41">✕ CLOSE 3D</button>
   <div id="viewer-info" style="position:absolute;top:14px;left:18px;font-size:9px;letter-spacing:0.11em;color:rgba(0,216,255,0.48);line-height:2.2;z-index:41">
     FILE <span id="vf-name" style="color:#00d8ff">--</span><br>
     VERTS <span id="vf-verts" style="color:#00d8ff">--</span><br>
     FACES <span id="vf-faces" style="color:#00d8ff">--</span><br>
     <span style="color:rgba(0,216,255,0.22);display:block;margin-top:6px">PINCH + DRAG = ROTATE</span>
-    <span style="color:rgba(0,216,255,0.22)">SCROLL = ZOOM</span>
+    <span style="color:rgba(0,216,255,0.22)">SCROLL = ZOOM · SWIPE = ROTATE</span>
   </div>
 </div>
 <div id="file-drop" style="position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);display:none;z-index:42;pointer-events:none">
@@ -611,12 +610,30 @@ setTimeout(()=>{jVoice=findMaleVoice();},400);
 function speak(text,force=false){
   if(speaking&&!force)return;if(force)speechSynthesis.cancel();
   speaking=true;setCoreState('active');SFX.speakStart();showSpoke(text);
+  // Kill recognition immediately — mic must be dead while speaker is active
+  if(recog){ try{ recog.abort(); }catch(e){} }
   const cleaned=text.replace(/J\.A\.R\.V\.I\.S/g,'Jarvis').replace(/[<>]/g,'');
   const u=new SpeechSynthesisUtterance(cleaned);
   if(jVoice)u.voice=jVoice;
   u.rate=0.88;u.pitch=0.82;u.volume=1;
-  u.onend=()=>{speaking=false;setTimeout(()=>{if(!listening)setCoreState(wakeActive?'listening':'idle');},500);clearSpoke();};
-  u.onerror=()=>{speaking=false;setCoreState('idle');clearSpoke();};
+  u.onend=()=>{
+    speaking=false;
+    clearSpoke();
+    setTimeout(()=>{ if(!listening)setCoreState(wakeActive?'listening':'idle'); },300);
+    // Wait for sound to fully decay: base 1500ms + 80ms per word
+    // This prevents the mic picking up speaker reverb / room echo
+    const wordCount=(text.match(/\S+/g)||[]).length;
+    const micDelay=1500+wordCount*80;
+    setTimeout(()=>{
+      if(micReady&&recog&&!listening&&!speaking){
+        try{ recog.start(); }catch(e){}
+      }
+    }, micDelay);
+  };
+  u.onerror=()=>{
+    speaking=false;setCoreState('idle');clearSpoke();
+    setTimeout(()=>{ if(micReady&&recog&&!listening&&!speaking){ try{ recog.start(); }catch(e){} } },1200);
+  };
   speechSynthesis.speak(u);
 }
 function showSpoke(text){
@@ -659,6 +676,9 @@ async function startMic() {
   };
 
   recog.onresult = (e) => {
+    // Discard everything heard while Jarvis is speaking — it's just his own voice
+    if(speaking) return;
+
     let interim = '';
     let final = '';
 
@@ -722,15 +742,13 @@ async function startMic() {
     $('mic-lbl').textContent = micReady ? (wakeActive ? 'LISTENING' : 'WAKE WORD') : 'MIC OFF';
     hideInterim();
 
-    // Always restart — continuous listening
-    // Small delay if we were speaking so we don't pick up Jarvis's voice
-    if (micReady) {
-      const delay = speaking ? 1800 : 150;
+    // If speaking, speak() will restart the mic after audio ends — don't double-restart
+    if (micReady && !speaking) {
       setTimeout(() => {
-        if (micReady && recog) {
-          try { recog.start(); } catch(e) { /* already started */ }
+        if (micReady && recog && !listening && !speaking) {
+          try { recog.start(); } catch(e) {}
         }
-      }, delay);
+      }, 150);
     }
   };
 
@@ -978,6 +996,17 @@ function handleCmd(raw){
 
   // 3D file
   if(m.match(/(?:open|upload|load|show|bring up|give me)(?:\s+a|\s+the|\s+my)?\s*(?:3d|stl|obj|ply|fbx|three.?d|model|mesh|file)/i)){ openFilePrompt(); return; }
+  if(m.match(/(?:close|exit|hide|remove|dismiss|shut)(?:\s+the)?\s*(?:3d|viewer|model|mesh|file|object)/i)){
+    if(viewerOpen){
+      viewerOpen=false;
+      $('viewer-wrap').classList.remove('on');
+      if(viewerAnim)cancelAnimationFrame(viewerAnim);
+      speak('3D viewer closed.');
+    } else {
+      speak('No 3D file is currently open.');
+    }
+    return;
+  }
 
   // Time / date
   if(m.match(/what.?s the time|what time/)){ speak(`It's ${new Date().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'})}.`); return; }
@@ -1564,8 +1593,10 @@ function loadFile(file){
   if(ext==='stl') reader.readAsArrayBuffer(file); else reader.readAsText(file);
 }
 if($('viewer-close')) $('viewer-close').addEventListener('click',()=>{
-  viewerOpen=false;$('viewer-wrap').classList.remove('on');
-  if(viewerAnim)cancelAnimationFrame(viewerAnim);speak('3D viewer closed.');
+  viewerOpen=false;
+  $('viewer-wrap').classList.remove('on');
+  if(viewerAnim){ cancelAnimationFrame(viewerAnim); viewerAnim=null; }
+  speak('3D viewer closed.');
 });
 if($('file-input')) $('file-input').addEventListener('change',function(e){
   const file=e.target.files[0]; if(!file)return;
@@ -1636,21 +1667,33 @@ function normMesh(){
   mesh3d.verts=mesh3d.verts.map(([x,y,z])=>[(x-cx)*sc,(y-cy)*sc,(z-cz)*sc]);
 }
 function openViewer(name){
-  viewerOpen=true;$('viewer-wrap').classList.add('on');
+  viewerOpen=true;
+  $('viewer-wrap').classList.add('on');
   viewRotX=0.3;viewRotY=0;viewScale=1;
-  const vcv=$('viewer-cv');vcv.width=window.innerWidth;vcv.height=window.innerHeight;
   SFX.fileOpen();
-  speak(`${name} loaded. ${mesh3d.faces.length.toLocaleString()} faces. Pinch and drag to rotate, scroll to zoom.`);
-  if(viewerAnim)cancelAnimationFrame(viewerAnim);
-  (function vloop(){if(!viewerOpen)return;renderViewer();viewerAnim=requestAnimationFrame(vloop);})();
+  speak(`${name} loaded. ${mesh3d.faces.length.toLocaleString()} faces. Pinch and drag to rotate. Say close 3D file to exit.`);
+  // Rendering handled by main draw loop — drawCore() calls renderViewer() when viewerOpen
 }
 function renderViewer(){
-  const vcv=$('viewer-cv'),vctx=vcv.getContext('2d'),W2=vcv.width,H2=vcv.height,ccx=W2/2,ccy=H2/2;
-  vctx.clearRect(0,0,W2,H2);vctx.fillStyle='rgba(0,3,12,0.97)';vctx.fillRect(0,0,W2,H2);
+  // Draw directly on the main canvas (ctx/cv) — replaces the core sphere area
+  const W2=W,H2=H,ccx=CX,ccy=CY;
+  const cR=Math.min(W2,H2)*0.40;
+
   if(pinching&&viewDragging){viewRotY+=(mx-prevMx)*0.005;viewRotX+=(my-prevMy)*0.005;}
   viewDragging=pinching;prevMx=mx;prevMy=my;
   if(!pinching&&!handDetected)viewRotY+=0.004;
-  const sc=viewScale*Math.min(W2,H2)*0.28;
+
+  // Clip to core circle — rings and HUD outside remain visible
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(ccx,ccy,cR*0.96,0,Math.PI*2);
+  ctx.clip();
+
+  // Dark fill inside core (replaces the glowing sphere)
+  ctx.fillStyle='rgba(0,3,12,0.97)';
+  ctx.fill();
+
+  const sc=viewScale*cR*0.85;
   const cosX=Math.cos(viewRotX),sinX=Math.sin(viewRotX),cosY=Math.cos(viewRotY),sinY=Math.sin(viewRotY);
   const proj=mesh3d.verts.map(([x,y,z])=>{
     let x1=x*cosY+z*sinY,z1=-x*sinY+z*cosY,y2=y*cosX-z1*sinX,z2=y*sinX+z1*cosX;
@@ -1664,19 +1707,28 @@ function renderViewer(){
       const pa=proj[f[0]],pb=proj[f[1]],pc=proj[f[2]];if(!pa||!pb||!pc)return;
       const n=mesh3d.normals[i]||[0,0,1];
       const dot=Math.max(0,n[0]*0.5+n[1]*0.7+n[2]*0.9);const br=0.2+dot*0.8;
-      vctx.beginPath();vctx.moveTo(pa.sx,pa.sy);vctx.lineTo(pb.sx,pb.sy);vctx.lineTo(pc.sx,pc.sy);vctx.closePath();
-      vctx.fillStyle=`rgba(0,${Math.round(140*br)},${Math.round(220*br)},${0.25+dot*0.3})`;vctx.fill();
-      vctx.strokeStyle=`rgba(0,${Math.round(180*br)},${Math.round(255*br)},${0.4+dot*0.3})`;vctx.lineWidth=0.3;vctx.stroke();
+      ctx.beginPath();ctx.moveTo(pa.sx,pa.sy);ctx.lineTo(pb.sx,pb.sy);ctx.lineTo(pc.sx,pc.sy);ctx.closePath();
+      ctx.fillStyle=`rgba(0,${Math.round(140*br)},${Math.round(220*br)},${0.25+dot*0.3})`;ctx.fill();
+      ctx.strokeStyle=`rgba(0,${Math.round(180*br)},${Math.round(255*br)},${0.4+dot*0.3})`;ctx.lineWidth=0.3;ctx.stroke();
     });
+
   // Grid floor
-  vctx.save();vctx.globalAlpha=0.05;vctx.strokeStyle='#00d8ff';vctx.lineWidth=0.5;
+  ctx.save();ctx.globalAlpha=0.05;ctx.strokeStyle='#00d8ff';ctx.lineWidth=0.5;
   for(let i=-5;i<=5;i++){
     const pts1=[[i*0.4,-1,-2],[i*0.4,-1,2]].map(([x,y,z])=>{let x1=x*cosY+z*sinY,z1=-x*sinY+z*cosY,y2=y*cosX-z1*sinX,z2=y*sinX+z1*cosX,d=3+z2;return{sx:ccx+x1/d*sc,sy:ccy-y2/d*sc};});
-    vctx.beginPath();vctx.moveTo(pts1[0].sx,pts1[0].sy);vctx.lineTo(pts1[1].sx,pts1[1].sy);vctx.stroke();
+    ctx.beginPath();ctx.moveTo(pts1[0].sx,pts1[0].sy);ctx.lineTo(pts1[1].sx,pts1[1].sy);ctx.stroke();
     const pts2=[[-2,-1,i*0.4],[2,-1,i*0.4]].map(([x,y,z])=>{let x1=x*cosY+z*sinY,z1=-x*sinY+z*cosY,y2=y*cosX-z1*sinX,z2=y*sinX+z1*cosX,d=3+z2;return{sx:ccx+x1/d*sc,sy:ccy-y2/d*sc};});
-    vctx.beginPath();vctx.moveTo(pts2[0].sx,pts2[0].sy);vctx.lineTo(pts2[1].sx,pts2[1].sy);vctx.stroke();
+    ctx.beginPath();ctx.moveTo(pts2[0].sx,pts2[0].sy);ctx.lineTo(pts2[1].sx,pts2[1].sy);ctx.stroke();
   }
-  vctx.restore();
+  ctx.restore();
+
+  ctx.restore(); // end clip
+
+  // Cyan rim around core
+  ctx.save();
+  ctx.beginPath();ctx.arc(ccx,ccy,cR*0.96,0,Math.PI*2);
+  ctx.strokeStyle='rgba(0,216,255,0.5)';ctx.lineWidth=1.5;ctx.stroke();
+  ctx.restore();
 }
 document.addEventListener('wheel',e=>{e.preventDefault();if(viewerOpen)viewScale=Math.max(0.2,Math.min(5,viewScale-e.deltaY*0.001));},{passive:false});
 
@@ -1751,6 +1803,8 @@ function drawGrid(){const vy=CY*0.47;ctx.save();ctx.globalAlpha=0.022;ctx.stroke
 function drawParticles(){PARTS.forEach(p=>{p.life+=p.ls;p.x+=p.vx;p.y+=p.vy;if(p.x<-200)p.x=W+100;if(p.x>W+100)p.x=-200;if(p.y<-100)p.y=H+100;if(p.y>H+100)p.y=-100;ctx.save();ctx.globalAlpha=p.a*(0.5+0.5*Math.sin(p.life));ctx.fillStyle=`hsl(${p.hue},88%,64%)`;ctx.beginPath();ctx.arc(p.x,p.y,p.r,0,Math.PI*2);ctx.fill();ctx.restore();});}
 
 function drawCore(){
+  // When 3D viewer is open, render the mesh inside the core circle instead of the sphere
+  if(viewerOpen){ renderViewer(); return; }
   const isP=coreState==='processing',isA=coreState==='active',isL=coreState==='listening'||wakeActive,isE=coreState==='error';
   const cR=Math.min(W,H)*0.40;
   const pulse=1+0.055*Math.sin(t*0.032);
