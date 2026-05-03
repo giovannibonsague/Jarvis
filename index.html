@@ -852,71 +852,46 @@ async function playMusic(query){
   notif('SEARCHING: ' + query.toUpperCase());
 
   currentSong = query;
-  $('music-title').textContent = '♪ ' + query;
-  $('music-player').classList.add('on');
+  if($('music-title')) $('music-title').textContent = '\u266a ' + query;
+  if($('music-player')) $('music-player').classList.add('on');
 
-  // Create hidden player container
-  let wrap = document.getElementById('yt-wrap');
-  if(!wrap){
-    wrap = document.createElement('div');
-    wrap.id = 'yt-wrap';
-    wrap.style.cssText = 'position:fixed;bottom:0;right:0;width:1px;height:1px;opacity:0.01;pointer-events:none;z-index:1;overflow:hidden;';
-    document.body.appendChild(wrap);
-  }
+  // Remove old player
+  const old = document.getElementById('yt-wrap');
+  if(old) old.remove();
+  if(ytIframe){ try{ ytIframe.destroy(); }catch(e){} ytIframe=null; }
 
-  // Use YouTube IFrame API's built-in search (listType:'search') — zero API key, zero CORS
-  loadYTApi();
-  const waitForYT = (cb) => { if(window.YT && window.YT.Player) cb(); else setTimeout(()=>waitForYT(cb),200); };
+  // Plain iframe — no JS API, no API key, no CORS.
+  // youtube.com/embed?listType=search&list=QUERY plays top search result automatically.
+  const wrap = document.createElement('div');
+  wrap.id = 'yt-wrap';
+  wrap.style.cssText = 'position:fixed;bottom:0;right:0;width:2px;height:2px;overflow:hidden;z-index:1;pointer-events:none;opacity:0.01;';
+  const iframe = document.createElement('iframe');
+  iframe.id = 'yt-iframe';
+  iframe.width = '2';
+  iframe.height = '2';
+  iframe.allow = 'autoplay; encrypted-media';
+  iframe.setAttribute('allowfullscreen','');
+  iframe.src = 'https://www.youtube.com/embed?listType=search&list='+encodeURIComponent(query)+'&autoplay=1&controls=0&playsinline=1&rel=0&enablejsapi=1';
+  wrap.appendChild(iframe);
+  document.body.appendChild(wrap);
 
-  waitForYT(()=>{
-    if(ytIframe){ try{ ytIframe.destroy(); }catch(e){} ytIframe=null; }
-    wrap.innerHTML = '<div id="yt-player-div"></div>';
+  speak('Playing '+query+'.');
+  setCoreState('idle');
+  if($('m-play')) $('m-play').textContent = '\u275a\u275a';
 
-    ytIframe = new YT.Player('yt-player-div',{
-      width: 1, height: 1,
-      playerVars:{
-        autoplay: 1,
-        controls: 0,
-        playsinline: 1,
-        mute: 1,
-        listType: 'search',
-        list: query,           // YouTube natively searches by this string
-        rel: 0,
-      },
-      events:{
-        onReady: e => {
-          e.target.playVideo();
-          // Unmute after autoplay starts — satisfies browser policy
-          setTimeout(()=>{
-            try{
-              e.target.unMute();
-              e.target.setVolume(Math.round(($('vol-sl').value||0.8)*100));
-              // Update title from actual video
-              const vd = e.target.getVideoData?.();
-              if(vd?.title){ currentSong=vd.title; $('music-title').textContent='♪ '+vd.title; notif('NOW PLAYING: '+vd.title.toUpperCase().slice(0,40)); }
-            }catch(e2){}
-          }, 800);
-          startProgressTracking();
-          speak(`Playing ${query}.`);
-          setCoreState('idle');
-        },
-        onStateChange: e => {
-          if(e.data===1){ $('m-play').textContent='❚❚'; }
-          if(e.data===2){ $('m-play').textContent='▶'; }
-          if(e.data===0){ $('m-play').textContent='▶'; clearInterval(musicProgressTimer); $('music-progress-fill').style.width='100%'; }
-          if(e.data===-1||e.data===5){ // unstarted/cued — force play
-            try{ e.target.playVideo(); }catch(ex){}
-          }
-        },
-        onError: e => {
-          speak(`Couldn't play ${query}. YouTube blocked it or it's unavailable.`);
-          setCoreState('idle');
-          notif('MUSIC ERROR: '+e.data,'warn');
-        }
-      }
-    });
-  });
+  // Stub controls via postMessage
+  ytIframe = {
+    _iframe: iframe,
+    _cmd(fn){ try{ iframe.contentWindow.postMessage(JSON.stringify({event:'command',func:fn,args:''}),'*'); }catch(ex){} },
+    pauseVideo(){ this._cmd('pauseVideo'); },
+    playVideo(){  this._cmd('playVideo');  },
+    stopVideo(){  this._cmd('stopVideo');  },
+    destroy(){    wrap.remove(); },
+    getPlayerState(){ return -1; },
+  };
 }
+
+
 
 function startProgressTracking(){
   clearInterval(musicProgressTimer);
@@ -1189,6 +1164,21 @@ function hideModelLoadProgress() {
 
 async function sendAI(msg) {
   setCoreState('processing'); SFX.processingStart();
+
+  // Topic-change detection: if the new message shares almost no words with recent history,
+  // treat it as a new topic and flush old context so Jarvis doesn't drift back.
+  if(convoHistory.length >= 2){
+    const lastExchange = convoHistory.slice(-4).map(m=>m.content).join(' ').toLowerCase();
+    const newWords = new Set(msg.toLowerCase().split(/\W+/).filter(w=>w.length>3));
+    const oldWords = new Set(lastExchange.split(/\W+/).filter(w=>w.length>3));
+    const overlap = [...newWords].filter(w=>oldWords.has(w)).length;
+    const similarity = newWords.size ? overlap/newWords.size : 1;
+    // If less than 20% word overlap and previous exchange was substantial, it's a new topic
+    if(similarity < 0.20 && lastExchange.length > 80){
+      convoHistory = []; // clear — fresh start
+    }
+  }
+
   convoHistory.push({role:'user', content:msg});
 
   if(!webllmReady) {
@@ -1240,7 +1230,7 @@ Be efficient, intelligent, and reliable.
     const reply = await webllmEngine.chat.completions.create({
       messages: [
         {role:'system', content:sys},
-        ...convoHistory.slice(-8)
+        ...convoHistory.slice(-4)
       ],
       temperature: 0.8,
       max_tokens: 250,
@@ -1258,7 +1248,7 @@ Be efficient, intelligent, and reliable.
     }
 
     convoHistory.push({role:'assistant', content:resp});
-    if(convoHistory.length > 18) convoHistory = convoHistory.slice(-12);
+    if(convoHistory.length > 10) convoHistory = convoHistory.slice(-6);
     SFX.processingEnd();
     speak(resp);
 
