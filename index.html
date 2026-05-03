@@ -416,12 +416,24 @@ html,body{width:100%;height:100%;overflow:hidden;background:#000;cursor:none;
     <div class="bi">CORES&nbsp;<span class="bv" id="bot-cores">--</span></div>
     <div class="bs"></div>
     <div class="bi" style="margin-left:auto">
-      <span id="bot-user" style="font-family:var(--fo);color:var(--a);letter-spacing:0.2em;font-size:9px">USER</span>
+      <span id="bot-user" style="font-family:var(--fo);color:var(--a);letter-spacing:0.2em;font-size:9px;cursor:pointer" onclick="openProfile()">USER</span>
     </div>
   </div>
 
 </div>
 
+
+<!-- USER PROFILE PANEL -->
+<div id="profile-panel" style="display:none;position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:300;background:rgba(0,4,16,0.98);border:1px solid rgba(0,216,255,0.3);border-radius:4px;padding:28px 32px;min-width:360px;max-width:480px;font-family:'Share Tech Mono',monospace;box-shadow:0 0 60px rgba(0,216,255,0.06);">
+  <div style="font-family:'Orbitron',monospace;font-size:11px;letter-spacing:0.3em;color:#00d8ff;margin-bottom:20px">◈ USER PROFILE</div>
+  <div style="font-size:8px;letter-spacing:0.15em;color:rgba(0,216,255,0.4);margin-bottom:16px">SAVED LOCALLY · USED BY JARVIS AS CONTEXT</div>
+  <div id="profile-fields" style="display:flex;flex-direction:column;gap:10px"></div>
+  <div style="margin-top:16px;display:flex;gap:10px">
+    <button onclick="addProfileField()" style="flex:1;font-family:'Share Tech Mono',monospace;font-size:8px;letter-spacing:0.15em;color:#00d8ff;border:1px solid rgba(0,216,255,0.3);background:rgba(0,216,255,0.05);padding:7px;cursor:pointer;border-radius:2px">+ ADD FIELD</button>
+    <button onclick="saveProfile()" style="flex:1;font-family:'Share Tech Mono',monospace;font-size:8px;letter-spacing:0.15em;color:#00ff88;border:1px solid rgba(0,255,136,0.4);background:rgba(0,255,136,0.05);padding:7px;cursor:pointer;border-radius:2px">✓ SAVE</button>
+    <button onclick="closeProfile()" style="flex:1;font-family:'Share Tech Mono',monospace;font-size:8px;letter-spacing:0.15em;color:rgba(0,216,255,0.4);border:1px solid rgba(0,216,255,0.15);background:transparent;padding:7px;cursor:pointer;border-radius:2px">✕ CLOSE</button>
+  </div>
+</div>
 
 
 <!-- 3D VIEWER HUD — overlaid on top of main canvas, no separate canvas needed -->
@@ -839,49 +851,67 @@ async function playMusic(query){
   setCoreState('processing');
   notif('SEARCHING: ' + query.toUpperCase());
 
-  const result = await searchYouTube(query);
-  if(!result){ speak(`Couldn't find ${query}. Try saying the song name more precisely.`); setCoreState('idle'); return; }
-
-  currentSong = result.title || query;
-  speak(`Playing ${currentSong}.`);
-  notif('NOW PLAYING: ' + currentSong.toUpperCase());
-  $('music-title').textContent = '♪ ' + currentSong;
+  currentSong = query;
+  $('music-title').textContent = '♪ ' + query;
   $('music-player').classList.add('on');
-  loadYTApi();
 
-  // Embed YouTube player
-  const vid = result.videoId;
-  // Create or reuse iframe container
+  // Create hidden player container
   let wrap = document.getElementById('yt-wrap');
-  if(!wrap){ wrap = document.createElement('div'); wrap.id='yt-wrap'; wrap.style.cssText='position:fixed;bottom:100px;right:20px;width:1px;height:1px;opacity:0;pointer-events:none;z-index:1'; document.body.appendChild(wrap); }
+  if(!wrap){
+    wrap = document.createElement('div');
+    wrap.id = 'yt-wrap';
+    wrap.style.cssText = 'position:fixed;bottom:0;right:0;width:1px;height:1px;opacity:0.01;pointer-events:none;z-index:1;overflow:hidden;';
+    document.body.appendChild(wrap);
+  }
 
-  const waitForYT = (cb) => {
-    if(window.YT && window.YT.Player) cb();
-    else setTimeout(()=>waitForYT(cb), 200);
-  };
+  // Use YouTube IFrame API's built-in search (listType:'search') — zero API key, zero CORS
+  loadYTApi();
+  const waitForYT = (cb) => { if(window.YT && window.YT.Player) cb(); else setTimeout(()=>waitForYT(cb),200); };
 
   waitForYT(()=>{
-    if(ytIframe){ ytIframe.destroy(); }
-    const div = document.createElement('div'); div.id='yt-player-div'; wrap.innerHTML=''; wrap.appendChild(div);
+    if(ytIframe){ try{ ytIframe.destroy(); }catch(e){} ytIframe=null; }
+    wrap.innerHTML = '<div id="yt-player-div"></div>';
+
     ytIframe = new YT.Player('yt-player-div',{
-      videoId: vid, width:1, height:1,
-      playerVars:{autoplay:1,controls:0,playsinline:1,mute:1},
+      width: 1, height: 1,
+      playerVars:{
+        autoplay: 1,
+        controls: 0,
+        playsinline: 1,
+        mute: 1,
+        listType: 'search',
+        list: query,           // YouTube natively searches by this string
+        rel: 0,
+      },
       events:{
         onReady: e => {
           e.target.playVideo();
-          setTimeout(()=>{ e.target.unMute(); e.target.setVolume(Math.round(($('vol-sl').value||0.8)*100)); }, 800);
+          // Unmute after autoplay starts — satisfies browser policy
+          setTimeout(()=>{
+            try{
+              e.target.unMute();
+              e.target.setVolume(Math.round(($('vol-sl').value||0.8)*100));
+              // Update title from actual video
+              const vd = e.target.getVideoData?.();
+              if(vd?.title){ currentSong=vd.title; $('music-title').textContent='♪ '+vd.title; notif('NOW PLAYING: '+vd.title.toUpperCase().slice(0,40)); }
+            }catch(e2){}
+          }, 800);
           startProgressTracking();
-          setCoreState('active');
-          setTimeout(()=>setCoreState('idle'),1000);
+          speak(`Playing ${query}.`);
+          setCoreState('idle');
         },
         onStateChange: e => {
-          if(e.data === 0){ // ended
-            $('m-play').textContent='▶';
-            $('music-progress-fill').style.width='100%';
-            clearInterval(musicProgressTimer);
+          if(e.data===1){ $('m-play').textContent='❚❚'; }
+          if(e.data===2){ $('m-play').textContent='▶'; }
+          if(e.data===0){ $('m-play').textContent='▶'; clearInterval(musicProgressTimer); $('music-progress-fill').style.width='100%'; }
+          if(e.data===-1||e.data===5){ // unstarted/cued — force play
+            try{ e.target.playVideo(); }catch(ex){}
           }
-          if(e.data === 1) $('m-play').textContent='❚❚';
-          if(e.data === 2) $('m-play').textContent='▶';
+        },
+        onError: e => {
+          speak(`Couldn't play ${query}. YouTube blocked it or it's unavailable.`);
+          setCoreState('idle');
+          notif('MUSIC ERROR: '+e.data,'warn');
         }
       }
     });
@@ -995,7 +1025,7 @@ function handleCmd(raw){
   if(searchM){ webSearch(searchM[1].trim()); return; }
 
   // 3D file
-  if(m.match(/(?:open|upload|load|show|bring up|give me)(?:\s+a|\s+the|\s+my)?\s*(?:3d|stl|obj|ply|fbx|three.?d|model|mesh|file)/i)){ openFilePrompt(); return; }
+  if(m.match(/(?:open|show|edit|update|my)\s*(?:profile|info|information|about me|personal)/i)){ openProfile(); speak('Opening your profile.'); return; }
   if(m.match(/(?:close|exit|hide|remove|dismiss|shut)(?:\s+the)?\s*(?:3d|viewer|model|mesh|file|object)/i)){
     if(viewerOpen){
       viewerOpen=false;
@@ -1169,26 +1199,8 @@ async function sendAI(msg) {
     return;
   }
 
-  // Build system prompt with all real stats + user info
-  const mem = performance.memory;
-  const conn = navigator.connection || {};
-  const bat = await navigator.getBattery?.().catch(()=>null);
-  const sysInfo = [
-    `User: ${userName}`,
-    `Time: ${new Date().toLocaleString()}`,
-    `OS: ${navigator.userAgent.includes('Windows')?'Windows':navigator.userAgent.includes('Mac')?'macOS':'Linux'}`,
-    `CPU cores: ${navigator.hardwareConcurrency||'?'}`,
-    `RAM: ${navigator.deviceMemory||'?'}GB device RAM`,
-    mem ? `JS heap: ${(mem.usedJSHeapSize/1048576).toFixed(0)}MB / ${(mem.jsHeapSizeLimit/1048576).toFixed(0)}MB` : '',
-    `Screen: ${screen.width}×${screen.height}`,
-    `Network: ${conn.effectiveType||'?'} RTT:${conn.rtt||'?'}ms`,
-    bat ? `Battery: ${Math.round(bat.level*100)}% ${bat.charging?'charging':'on battery'}` : '',
-    `FPS: ${fps}`,
-    `Camera: ${camReady?'active':'offline'}`,
-    `Mic: ${micReady?'active':'offline'}`,
-    `Weather: ${$('wtemp')?.textContent||'?'} ${$('wcond')?.textContent||''} in ${$('wcity')?.textContent||'?'}`,
-    `Location: ${$('wcity')?.textContent||'unknown'}`,
-  ].filter(Boolean).join(', ');
+  // Build system prompt — includes user profile from localStorage
+  const sysInfo = getFullSysInfo();
   const sys = `
 You are Jarvis, an AI assistant.
 PERSONALITY:
@@ -1699,11 +1711,18 @@ function renderViewer(){
     let x1=x*cosY+z*sinY,z1=-x*sinY+z*cosY,y2=y*cosX-z1*sinX,z2=y*sinX+z1*cosX;
     const d=3+z2;return{sx:ccx+x1/d*sc,sy:ccy-y2/d*sc,z:z2};
   });
-  const maxF=Math.min(mesh3d.faces.length,6000),step=Math.max(1,Math.floor(mesh3d.faces.length/maxF));
-  mesh3d.faces.map((f,i)=>({f,i,z:(proj[f[0]]?.z||0)+(proj[f[1]]?.z||0)+(proj[f[2]]?.z||0)}))
-    .sort((a,b)=>a.z-b.z)
-    .forEach(({f,i},idx)=>{
-      if(idx%step!==0)return;
+  const FACE_CAP = 3000;
+  const step = Math.max(1, Math.floor(mesh3d.faces.length / FACE_CAP));
+  // Only sort depth when not actively rotating (sort is expensive on large meshes)
+  const isRotating = Math.abs(viewRotY - (renderViewer._lastRY||0)) > 0.01;
+  renderViewer._lastRY = viewRotY;
+  const faceList = [];
+  for(let i=0;i<mesh3d.faces.length;i+=step) faceList.push(i);
+  if(!isRotating && faceList.length < 2000){
+    faceList.sort((a,b)=>(proj[mesh3d.faces[a][0]]?.z||0)-(proj[mesh3d.faces[b][0]]?.z||0));
+  }
+  faceList.forEach(i=>{
+      const f=mesh3d.faces[i];
       const pa=proj[f[0]],pb=proj[f[1]],pc=proj[f[2]];if(!pa||!pb||!pc)return;
       const n=mesh3d.normals[i]||[0,0,1];
       const dot=Math.max(0,n[0]*0.5+n[1]*0.7+n[2]*0.9);const br=0.2+dot*0.8;
@@ -1883,7 +1902,10 @@ function updateHand(){hvx+=(mx-hx)*0.1;hvy+=(my-hy)*0.1;hvx*=0.72;hvy*=0.72;hx+=
 function frame(ts){
   const dt=ts-lastT;lastT=ts;t++;fc++;fpsTimer+=dt;
   if(fpsTimer>=1000){fps=Math.round(fc*1000/fpsTimer);fc=0;fpsTimer=0;}
-  if(!viewerOpen){ctx.clearRect(0,0,W,H);ctx.fillStyle='#000';ctx.fillRect(0,0,W,H);drawGrid();drawParticles();drawCore();drawSparks();}
+  ctx.clearRect(0,0,W,H);ctx.fillStyle='#000';ctx.fillRect(0,0,W,H);
+  drawGrid();drawParticles();
+  drawCore(); // draws 3D mesh when viewerOpen, sphere otherwise
+  drawSparks();
   updateHand();
   if(t%280===0&&!pinching&&!speaking&&!listening&&!wakeActive&&coreState==='idle'){const ss=['idle','idle','processing','active'][Math.floor(Math.random()*4)];setCoreState(ss);if(ss!=='idle'){spawnSparks(4);setTimeout(()=>setCoreState('idle'),2500);}}
   requestAnimationFrame(frame);
@@ -1951,6 +1973,103 @@ function checkSavedUser(){
 
 function saveUser(name){
   try{ localStorage.setItem('jarvis_user', JSON.stringify({name, saved: Date.now()})); }catch(e){}
+}
+
+// ── USER PROFILE (localStorage) ──
+const PROFILE_DEFAULTS = [
+  {key:'name',       label:'NAME',        value:''},
+  {key:'age',        label:'AGE',         value:''},
+  {key:'location',   label:'LOCATION',    value:''},
+  {key:'occupation', label:'OCCUPATION',  value:''},
+  {key:'interests',  label:'INTERESTS',   value:''},
+  {key:'notes',      label:'NOTES',       value:''},
+];
+
+function loadProfile(){
+  try{
+    const raw = localStorage.getItem('jarvis_profile');
+    return raw ? JSON.parse(raw) : [...PROFILE_DEFAULTS.map(f=>({...f}))];
+  }catch(e){ return [...PROFILE_DEFAULTS.map(f=>({...f}))]; }
+}
+
+function saveProfile(){
+  const fields = document.querySelectorAll('#profile-fields .pf-row');
+  const data = [];
+  fields.forEach(row=>{
+    const k = row.querySelector('.pf-key')?.value?.trim();
+    const v = row.querySelector('.pf-val')?.value?.trim();
+    if(k) data.push({key:k.toLowerCase().replace(/\s+/g,'_'), label:k.toUpperCase(), value:v||''});
+  });
+  try{ localStorage.setItem('jarvis_profile', JSON.stringify(data)); }catch(e){}
+  // Update userName if name field changed
+  const nameField = data.find(f=>f.key==='name'||f.key==='your_name');
+  if(nameField?.value){ userName=nameField.value; if($('bot-user'))$('bot-user').textContent=userName.toUpperCase(); saveUser(userName); }
+  closeProfile();
+  notif('PROFILE SAVED');
+  speak('Profile saved.');
+}
+
+function getProfileContext(){
+  const data = loadProfile();
+  if(!data.length) return '';
+  return 'User profile: ' + data.filter(f=>f.value).map(f=>`${f.label}: ${f.value}`).join(', ');
+}
+
+function openProfile(){
+  const panel = $('profile-panel');
+  if(!panel) return;
+  const data = loadProfile();
+  const container = $('profile-fields');
+  container.innerHTML = '';
+  data.forEach(f => addProfileFieldRow(f.label, f.value));
+  panel.style.display = 'block';
+}
+
+function closeProfile(){
+  const panel = $('profile-panel');
+  if(panel) panel.style.display='none';
+}
+
+function addProfileField(){
+  addProfileFieldRow('','');
+}
+
+function addProfileFieldRow(label='', value=''){
+  const container = $('profile-fields');
+  const row = document.createElement('div');
+  row.className = 'pf-row';
+  row.style.cssText = 'display:flex;gap:8px;align-items:center';
+  const fieldStyle = `flex:1;background:rgba(0,216,255,0.04);border:1px solid rgba(0,216,255,0.2);
+    border-radius:2px;padding:6px 8px;font-family:'Share Tech Mono',monospace;font-size:8px;
+    letter-spacing:0.12em;color:#00d8ff;outline:none;`;
+  row.innerHTML = `
+    <input class="pf-key" placeholder="FIELD" value="${label}" style="${fieldStyle}flex:0 0 110px;color:rgba(0,216,255,0.6)">
+    <input class="pf-val" placeholder="VALUE" value="${value}" style="${fieldStyle}">
+    <span onclick="this.closest('.pf-row').remove()" style="cursor:pointer;color:rgba(255,80,80,0.6);font-size:12px;padding:0 4px">✕</span>`;
+  container.appendChild(row);
+  row.querySelector('.pf-val').focus();
+}
+
+// Inject profile context into sysInfo for AI
+function getFullSysInfo(){
+  const mem = performance.memory;
+  const conn = navigator.connection || {};
+  const wtemp = $('wtemp')?.textContent||'?';
+  const wcond = $('wcond')?.textContent||'';
+  const wcity = $('wcity')?.textContent||'?';
+  const profile = getProfileContext();
+  return [
+    `User: ${userName}`,
+    profile,
+    `Time: ${new Date().toLocaleString()}`,
+    `OS: ${navigator.userAgent.includes('Windows')?'Windows':navigator.userAgent.includes('Mac')?'macOS':'Linux'}`,
+    `CPU cores: ${navigator.hardwareConcurrency||'?'}`,
+    `RAM: ${navigator.deviceMemory||'?'}GB`,
+    mem ? `JS heap: ${(mem.usedJSHeapSize/1048576).toFixed(0)}MB` : '',
+    `Network: ${conn.effectiveType||'?'}`,
+    `FPS: ${fps}`,
+    `Weather: ${wtemp} ${wcond} in ${wcity}`,
+  ].filter(Boolean).join(', ');
 }
 
 function launchSystems(){
