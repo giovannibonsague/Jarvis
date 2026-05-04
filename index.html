@@ -402,6 +402,9 @@ html,body{width:100%;height:100%;overflow:hidden;background:#000;cursor:none;
     <button class="mb" data-m="Phi-3.5-mini-instruct-q4f16_1-MLC" data-p="webllm">PHI 3.5</button>
     <button class="mb" data-m="gemma-2-2b-it-q4f32_1-MLC" data-p="webllm">GEMMA 2B</button>
     <button class="mb" data-m="Mistral-7B-Instruct-v0.3-q4f16_1-MLC" data-p="webllm">MISTRAL 7B</button>
+    <button class="mb" data-m="gpt-4o-mini" data-p="openai" style="border-color:rgba(74,222,128,0.4);color:rgba(74,222,128,0.9)">GPT-4o MINI ☁</button>
+    <button class="mb" data-m="gpt-4o" data-p="openai" style="border-color:rgba(74,222,128,0.4);color:rgba(74,222,128,0.9)">GPT-4o ☁</button>
+    <button class="mb" data-m="gpt-4-turbo" data-p="openai" style="border-color:rgba(74,222,128,0.4);color:rgba(74,222,128,0.9)">GPT-4 TURBO ☁</button>
   </div>
 <div id="bot">
     <div class="bi">BATTERY&nbsp;
@@ -427,6 +430,16 @@ html,body{width:100%;height:100%;overflow:hidden;background:#000;cursor:none;
 <div id="profile-panel" style="display:none;position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:300;background:rgba(0,4,16,0.98);border:1px solid rgba(0,216,255,0.3);border-radius:4px;padding:28px 32px;min-width:360px;max-width:480px;font-family:'Share Tech Mono',monospace;box-shadow:0 0 60px rgba(0,216,255,0.06);">
   <div style="font-family:'Orbitron',monospace;font-size:11px;letter-spacing:0.3em;color:#00d8ff;margin-bottom:20px">◈ USER PROFILE</div>
   <div style="font-size:8px;letter-spacing:0.15em;color:rgba(0,216,255,0.4);margin-bottom:16px">SAVED LOCALLY · USED BY JARVIS AS CONTEXT</div>
+
+  <div style="margin-bottom:14px;padding-bottom:14px;border-bottom:1px solid rgba(0,216,255,0.1)">
+    <div style="font-size:8px;letter-spacing:0.2em;color:rgba(74,222,128,0.7);margin-bottom:8px">☁ OPENAI API KEY</div>
+    <div style="display:flex;gap:8px;align-items:center">
+      <input id="oai-key-input" type="password" placeholder="sk-..." style="flex:1;background:rgba(74,222,128,0.04);border:1px solid rgba(74,222,128,0.2);border-radius:2px;padding:6px 8px;font-family:'Share Tech Mono',monospace;font-size:8px;letter-spacing:0.1em;color:rgba(74,222,128,0.9);outline:none;">
+      <button onclick="saveOpenAIKey()" style="font-family:'Share Tech Mono',monospace;font-size:8px;letter-spacing:0.15em;color:rgba(74,222,128,0.8);border:1px solid rgba(74,222,128,0.3);background:rgba(74,222,128,0.05);padding:6px 12px;cursor:pointer;border-radius:2px;white-space:nowrap">SAVE KEY</button>
+      <button onclick="clearOpenAIKey()" style="font-family:'Share Tech Mono',monospace;font-size:8px;letter-spacing:0.15em;color:rgba(255,80,80,0.6);border:1px solid rgba(255,80,80,0.2);background:transparent;padding:6px 10px;cursor:pointer;border-radius:2px">✕</button>
+    </div>
+    <div id="oai-key-status" style="font-size:7px;letter-spacing:0.12em;color:rgba(74,222,128,0.4);margin-top:5px">NO KEY STORED — SELECT A GPT MODEL ABOVE TO USE OPENAI</div>
+  </div>
   <div id="profile-fields" style="display:flex;flex-direction:column;gap:10px"></div>
   <div style="margin-top:16px;display:flex;gap:10px">
     <button onclick="addProfileField()" style="flex:1;font-family:'Share Tech Mono',monospace;font-size:8px;letter-spacing:0.15em;color:#00d8ff;border:1px solid rgba(0,216,255,0.3);background:rgba(0,216,255,0.05);padding:7px;cursor:pointer;border-radius:2px">+ ADD FIELD</button>
@@ -532,7 +545,9 @@ let camMx=CX,camMy=CY;
 
 // ── SFX ──
 let AC;
+let bgAmbience = null; // background music nodes
 const ac=()=>{if(!AC)AC=new(window.AudioContext||window.webkitAudioContext)();return AC;};
+
 function tone(f,d,type='sine',v=0.09,delay=0){
   try{const a=ac(),o=a.createOscillator(),g=a.createGain(),ct=a.currentTime+delay;
     o.connect(g);g.connect(a.destination);o.type=type;o.frequency.setValueAtTime(f,ct);
@@ -548,62 +563,327 @@ function sweep(f1,f2,d,type='sine',v=0.09,delay=0){
 }
 function chord(freqs,dur,v=0.06){freqs.forEach((f,i)=>tone(f,dur,'sine',v,i*0.01));}
 
+// Noise burst (whoosh/static)
+function noise(d=0.15,v=0.04,delay=0){
+  try{
+    const a=ac(),buf=a.createBuffer(1,a.sampleRate*d,a.sampleRate);
+    const data=buf.getChannelData(0);for(let i=0;i<data.length;i++)data[i]=(Math.random()*2-1);
+    const src=a.createBufferSource(),g=a.createGain(),f=a.createBiquadFilter();
+    f.type='bandpass';f.frequency.value=800;f.Q.value=0.5;
+    src.buffer=buf;src.connect(f);f.connect(g);g.connect(a.destination);
+    const ct=a.currentTime+delay;
+    g.gain.setValueAtTime(0,ct);g.gain.linearRampToValueAtTime(v,ct+0.02);
+    g.gain.exponentialRampToValueAtTime(0.001,ct+d);
+    src.start(ct);src.stop(ct+d+0.05);
+  }catch(e){}
+}
+
+// Pulse (heartbeat-style)
+function pulse(f,count=3,interval=0.18,v=0.07){
+  for(let i=0;i<count;i++) tone(f,0.06,'sine',v,i*interval);
+}
+
+// ── BACKGROUND AMBIENCE ──
+function startAmbience(){
+  try{
+    if(bgAmbience) return; // already running
+    const a=ac();
+    const masterGain=a.createGain();
+    masterGain.gain.setValueAtTime(0,a.currentTime);
+    masterGain.gain.linearRampToValueAtTime(0.025,a.currentTime+4); // fade in slowly
+    masterGain.connect(a.destination);
+
+    const nodes=[];
+
+    // Layer 1: deep sub drone (40Hz)
+    const sub=a.createOscillator(),subG=a.createGain();
+    sub.type='sine';sub.frequency.value=40;
+    subG.gain.value=0.4;sub.connect(subG);subG.connect(masterGain);sub.start();nodes.push(sub);
+
+    // Layer 2: mid drone (80Hz)
+    const mid=a.createOscillator(),midG=a.createGain();
+    mid.type='sine';mid.frequency.value=80;
+    midG.gain.value=0.25;mid.connect(midG);midG.connect(masterGain);mid.start();nodes.push(mid);
+
+    // Layer 3: high shimmer (160Hz + detune)
+    const hi=a.createOscillator(),hiG=a.createGain();
+    hi.type='sine';hi.frequency.value=160;hi.detune.value=8;
+    hiG.gain.value=0.12;hi.connect(hiG);hiG.connect(masterGain);hi.start();nodes.push(hi);
+
+    // Layer 4: ultra-low pulse (0.15Hz LFO on volume) — breathing effect
+    const lfo=a.createOscillator(),lfoG=a.createGain();
+    lfo.type='sine';lfo.frequency.value=0.12;
+    lfoG.gain.value=0.015;lfo.connect(lfoG);lfoG.connect(masterGain.gain);lfo.start();nodes.push(lfo);
+
+    // Layer 5: subtle high-freq shimmer sweep (oscillating 800-1200Hz at very low vol)
+    const shimmer=a.createOscillator(),shimG=a.createGain();
+    shimmer.type='sine';shimmer.frequency.value=900;
+    shimG.gain.value=0.018;shimmer.connect(shimG);shimG.connect(masterGain);shimmer.start();nodes.push(shimmer);
+
+    // Slow shimmer frequency modulation
+    const shimLFO=a.createOscillator(),shimLFOG=a.createGain();
+    shimLFO.type='sine';shimLFO.frequency.value=0.07;
+    shimLFOG.gain.value=180;shimLFO.connect(shimLFOG);shimLFOG.connect(shimmer.frequency);shimLFO.start();nodes.push(shimLFO);
+
+    // Sparse high ping every ~8 seconds via recursive setTimeout
+    let ambiencePingRunning=true;
+    function ambiencePing(){
+      if(!ambiencePingRunning)return;
+      try{
+        const o=a.createOscillator(),g=a.createGain();
+        o.type='sine';o.frequency.value=1200+Math.random()*800;
+        g.gain.setValueAtTime(0,a.currentTime);
+        g.gain.linearRampToValueAtTime(0.018,a.currentTime+0.05);
+        g.gain.exponentialRampToValueAtTime(0.001,a.currentTime+1.8);
+        o.connect(g);g.connect(a.destination);
+        o.start();o.stop(a.currentTime+2);
+      }catch(e){}
+      setTimeout(ambiencePing,6000+Math.random()*6000);
+    }
+    setTimeout(ambiencePing,3000);
+
+    bgAmbience={nodes,masterGain,a,ambiencePingRunning:true};
+  }catch(e){ console.warn('Ambience failed:',e); }
+}
+
+function stopAmbience(){
+  if(!bgAmbience) return;
+  try{
+    bgAmbience.ambiencePingRunning=false;
+    bgAmbience.masterGain.gain.linearRampToValueAtTime(0,bgAmbience.a.currentTime+2);
+    setTimeout(()=>{ bgAmbience.nodes.forEach(n=>{try{n.stop();}catch(e){}});bgAmbience=null; },2500);
+  }catch(e){ bgAmbience=null; }
+}
+
+function setAmbienceVolume(v){ // 0-1
+  if(!bgAmbience)return;
+  try{ bgAmbience.masterGain.gain.linearRampToValueAtTime(v*0.025,bgAmbience.a.currentTime+0.5); }catch(e){}
+}
+
 const SFX={
   // BOOT: full cinematic sequence
   boot(){
-    // Low rumble
     tone(60,0.8,'sine',0.12);
-    // Rising sweep
     sweep(80,800,1.2,'sine',0.08,0.1);
-    // Staggered chord reveal
     [[200,0.5],[300,0.55],[450,0.6],[600,0.65],[800,0.7],[1100,0.75],[1500,0.8]].forEach(([f,d])=>tone(f,0.5,'sine',0.07,d));
-    // Final triumphant chord
     setTimeout(()=>{
       chord([523,659,784,1047],0.6,0.08);
       sweep(1500,3000,0.3,'sine',0.05,0.15);
       tone(3000,0.4,'sine',0.06,0.45);
     },1600);
   },
-  // BOOT LINE BEEP: small blip for each boot line
+
+  // AUTH: user logs in / presses enter — cinematic unlock
+  auth(){
+    // Power-on thud
+    tone(55,0.5,'sine',0.18);
+    tone(110,0.4,'sine',0.1,0.05);
+    // Rising authorization sweep
+    sweep(200,1800,0.6,'sine',0.1,0.1);
+    // Confirmation chord cascade
+    [[523,0.8],[659,0.85],[784,0.9],[1047,0.95],[1319,1.0]].forEach(([f,d])=>tone(f,0.35,'sine',0.08,d));
+    // Final shimmer
+    setTimeout(()=>{
+      chord([784,988,1175,1568],0.5,0.07);
+      sweep(2000,4000,0.4,'sine',0.04,0.1);
+    },1400);
+  },
+
   // MODEL LOADED
   modelLoaded(){
     sweep(400,1200,0.2,'sine',0.1);
     chord([600,900,1200],0.3,0.08);
+    tone(1800,0.15,'sine',0.05,0.25);
   },
-  // WAKE WORD: ascending recognition
+
+  // WAKE WORD
   wake(){
-    sweep(500,1100,0.12,'sine',0.12);sweep(1100,1800,0.1,'sine',0.1,0.13);
+    sweep(500,1100,0.12,'sine',0.12);
+    sweep(1100,1800,0.1,'sine',0.1,0.13);
     chord([880,1320,1760],0.25,0.09);
   },
-  // SLEEP: descending
-  sleep(){sweep(1400,300,0.28,'sine',0.09);tone(250,0.2,'sine',0.05,0.28);},
-  // LISTENING: soft ping
-  listen(){tone(1200,0.04,'sine',0.08);tone(1600,0.04,'sine',0.08,0.04);},
-  // SPEAK START
-  speakStart(){sweep(350,700,0.07,'sine',0.08);},
-  // PROCESSING: pulsing tension while AI thinks
-  processingStart(){
-    // Three rising blips
-    [0,0.12,0.24].forEach(d=>sweep(600,900,0.08,'sine',0.07,d));
+
+  // SLEEP
+  sleep(){
+    sweep(1400,300,0.35,'sine',0.09);
+    tone(250,0.3,'sine',0.05,0.35);
+    tone(150,0.4,'sine',0.04,0.55);
   },
-  processingEnd(){chord([660,880,1100],0.2,0.08);},
-  // CONFIRM
-  confirm(){[660,880,1100,1400].forEach((f,i)=>tone(f,0.08,'sine',0.08,i*0.034));},
+
+  // LISTENING: soft activation ping
+  listen(){
+    tone(1200,0.04,'sine',0.08);
+    tone(1600,0.04,'sine',0.06,0.06);
+    tone(2000,0.03,'sine',0.04,0.12);
+  },
+
+  // SPEAK START: voice channel open
+  speakStart(){
+    sweep(350,700,0.07,'sine',0.08);
+    tone(700,0.03,'sine',0.04,0.07);
+  },
+
+  // PROCESSING START: tension ramp
+  processingStart(){
+    [0,0.12,0.24].forEach(d=>sweep(600,900,0.08,'sine',0.07,d));
+    pulse(440,2,0.22,0.04);
+  },
+
+  // PROCESSING END: resolution
+  processingEnd(){
+    chord([660,880,1100],0.2,0.08);
+    tone(1400,0.1,'sine',0.04,0.12);
+  },
+
+  // CONFIRM: success
+  confirm(){
+    [660,880,1100,1400].forEach((f,i)=>tone(f,0.1,'sine',0.08,i*0.04));
+  },
+
   // ERROR
-  error(){sweep(400,180,0.3,'sawtooth',0.07);},
-  // GRAB/RELEASE
-  grab(){tone(550,0.035,'square',0.055);tone(750,0.028,'square',0.04,0.022);},
-  release(){tone(900,0.028,'sine',0.06);tone(700,0.028,'sine',0.04,0.022);},
-  // FILE
-  fileOpen(){[350,500,750,1100,1600].forEach((f,i)=>sweep(f,f*1.45,0.1,'sine',0.055,i*0.06));},
-  // MUSIC
-  music(){[261,329,392,523].forEach((f,i)=>tone(f,0.3,'sine',0.07,i*0.08));},
+  error(){
+    sweep(400,180,0.3,'sawtooth',0.07);
+    tone(180,0.2,'sine',0.05,0.3);
+    noise(0.1,0.03,0.05);
+  },
+
+  // GRAB / PINCH
+  grab(){
+    tone(550,0.035,'square',0.055);
+    tone(750,0.028,'square',0.04,0.022);
+    noise(0.04,0.02,0);
+  },
+
+  // RELEASE
+  release(){
+    tone(900,0.03,'sine',0.06);
+    tone(700,0.03,'sine',0.04,0.025);
+  },
+
+  // SWIPE
+  swipe(dir){
+    if(dir==='left'||dir==='right'){
+      sweep(dir==='left'?900:400, dir==='left'?400:900, 0.12,'sine',0.07);
+      noise(0.06,0.015,0.02);
+    } else {
+      sweep(dir==='up'?600:900, dir==='up'?1100:400, 0.12,'sine',0.07);
+      noise(0.06,0.015,0.02);
+    }
+  },
+
+  // FILE OPEN
+  fileOpen(){
+    [350,500,750,1100,1600].forEach((f,i)=>sweep(f,f*1.45,0.1,'sine',0.055,i*0.06));
+    tone(2000,0.15,'sine',0.04,0.4);
+  },
+
+  // FILE CLOSE
+  fileClose(){
+    [1600,1100,750,500,350].forEach((f,i)=>sweep(f,f*0.7,0.08,'sine',0.05,i*0.05));
+  },
+
+  // MUSIC START
+  music(){
+    [261,329,392,523].forEach((f,i)=>tone(f,0.3,'sine',0.07,i*0.08));
+    sweep(523,1046,0.3,'sine',0.04,0.4);
+  },
+
   // SEARCH
-  search(){sweep(300,1200,0.25,'sine',0.07);tone(1200,0.15,'sine',0.06,0.25);},
-  // MODEL
-  model(){sweep(450,950,0.12,'sine',0.08);},
-  bootLine(){tone(600+Math.random()*300,0.04,'sine',0.04);},
+  search(){
+    sweep(300,1200,0.25,'sine',0.07);
+    tone(1200,0.15,'sine',0.06,0.25);
+    tone(1600,0.1,'sine',0.04,0.4);
+  },
+
+  // MODEL SWITCH
+  model(){
+    sweep(450,950,0.12,'sine',0.08);
+    tone(950,0.08,'sine',0.05,0.13);
+  },
+
+  // BOOT LINE BLIP
+  bootLine(){ tone(600+Math.random()*400,0.04,'sine',0.04); },
+
+  // NOTIFICATION
+  notif(){
+    tone(880,0.06,'sine',0.06);
+    tone(1100,0.06,'sine',0.05,0.07);
+  },
+
+  // WARNING
+  warn(){
+    sweep(600,400,0.15,'sawtooth',0.05);
+    tone(400,0.1,'sine',0.04,0.15);
+  },
+
+  // POPUP OPEN
+  popupOpen(){
+    sweep(300,700,0.1,'sine',0.06);
+    tone(700,0.06,'sine',0.04,0.1);
+  },
+
+  // POPUP CLOSE
+  popupClose(){
+    sweep(700,300,0.1,'sine',0.05);
+  },
+
+  // CAMERA ON
+  cameraOn(){
+    [400,600,900,1300].forEach((f,i)=>tone(f,0.07,'sine',0.06,i*0.05));
+    tone(1800,0.15,'sine',0.04,0.22);
+  },
+
+  // MIC ON
+  micOn(){
+    sweep(200,800,0.15,'sine',0.07);
+    chord([400,600,800],0.15,0.05);
+  },
+
+  // MIC OFF
+  micOff(){
+    sweep(800,200,0.15,'sine',0.06);
+    tone(200,0.1,'sine',0.04,0.15);
+  },
+
+  // HOVER (very subtle, for UI elements)
+  hover(){ tone(1200,0.02,'sine',0.025); },
+
+  // VOLUME CHANGE
+  volumeChange(v){ tone(440+v*4,0.05,'sine',0.04); },
+
+  // HAND DETECTED
+  handDetected(){
+    tone(600,0.04,'sine',0.05);
+    tone(900,0.04,'sine',0.04,0.05);
+  },
+
+  // HAND LOST
+  handLost(){ sweep(700,400,0.1,'sine',0.04); },
+
+  // DATA UPDATE (subtle tick for readouts)
+  dataTick(){ tone(800,0.015,'sine',0.02); },
+
+  // AI ONLINE
+  aiOnline(){
+    sweep(200,600,0.3,'sine',0.08);
+    chord([400,600,800,1000],0.4,0.06);
+    sweep(1000,2000,0.2,'sine',0.05,0.35);
+    tone(2500,0.2,'sine',0.04,0.55);
+  },
+
+  // PROFILE SAVE
+  profileSave(){
+    [440,550,660,880].forEach((f,i)=>tone(f,0.1,'sine',0.06,i*0.05));
+  },
+
+  // COMMAND RECOGNIZED
+  cmdRecognized(){
+    tone(880,0.04,'sine',0.06);
+    tone(1100,0.04,'sine',0.05,0.05);
+    noise(0.03,0.01,0.02);
+  },
 };
+
 
 // ── VOICE ──
 let jVoice=null;
@@ -666,6 +946,7 @@ let interimEl = null; // shows partial transcript live
 
 async function startMic() {
   micReady = true;
+  SFX.micOn();
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
   if (!SR) {
     $('mic-lbl').textContent = 'NOT SUPPORTED';
@@ -963,6 +1244,7 @@ async function webSearch(query){
 // ══════════════════════════════════════════
 function handleCmd(raw){
   const m = raw.toLowerCase().trim();
+  SFX.cmdRecognized();
 
   // ── MUSIC: play ──
   const playM = m.match(/^(?:play(?:\s+me|\s+some|\s+a)?|put\s+on|i\s+want\s+to\s+hear|listen\s+to|start\s+playing|can\s+you\s+play)\s+(.+)/i);
@@ -1001,6 +1283,9 @@ function handleCmd(raw){
 
   // ── HOW ARE YOU ──
   if(m.match(/^how\s+are\s+you\.?$/i)){ speak(`All systems nominal. Ready to assist.`); return; }
+
+  // ── COMMAND LIST ──
+  if(m.match(/\b(what\s+are\s+(the\s+)?commands?|what\s+commands?\s+(are\s+there|do\s+you\s+have|can\s+i\s+use)|list\s+commands?|show\s+commands?|commands?\s+list)\b/i)){ showCommandList(); speak('Here are the available commands.'); return; }
 
   // ── EXPLICIT SEARCH ──
   const searchM = m.match(/^(?:search\s+for|look\s+up|google|bing\s+for|search)\s+(.+)/i);
@@ -1072,8 +1357,8 @@ async function initWebLLM(modelId) {
     hideModelLoadProgress();
     notif('AI ONLINE — ' + modelId.split('-').slice(0,3).join(' ').toUpperCase());
     setCoreState('idle');
+    SFX.aiOnline();
     SFX.confirm();
-    SFX.modelLoaded();
     if($('mlbl')) $('mlbl').textContent = modelId.split('-')[0].toUpperCase();
     speak(`AI model loaded. I'm ready, ${userName}.`);
   } catch(e) {
@@ -1166,11 +1451,20 @@ async function sendAI(msg) {
 
   convoHistory.push({role:'user', content:msg});
 
-  if(!webllmReady) {
+  if(!webllmReady && currentProvider === 'webllm') {
     SFX.error();
     speak(`The AI model is still loading. Please wait a moment.`);
     setCoreState('idle');
     convoHistory.pop();
+    return;
+  }
+
+  if(currentProvider === 'openai' && !openaiKey) {
+    SFX.error();
+    speak(`No OpenAI API key stored. Open your profile and paste your key.`);
+    setCoreState('idle');
+    convoHistory.pop();
+    openProfile();
     return;
   }
 
@@ -1212,18 +1506,37 @@ Be efficient, intelligent, and reliable.
 `;
 
   try {
-    const reply = await webllmEngine.chat.completions.create({
-      messages: [
-        {role:'system', content:sys},
-        ...convoHistory.slice(-4)
-      ],
-      temperature: 0.8,
-      max_tokens: 250,
-      stream: false,
-    });
+    let resp = '';
 
-    let resp = reply.choices[0].message.content || '';
-    resp = resp.trim();
+    if(currentProvider === 'openai') {
+      // ── OpenAI API ──
+      const r = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'Content-Type':'application/json', 'Authorization':'Bearer '+openaiKey },
+        signal: AbortSignal.timeout(20000),
+        body: JSON.stringify({
+          model: currentModel,
+          messages: [{role:'system',content:sys}, ...convoHistory.slice(-4)],
+          max_tokens: 250,
+          temperature: 0.8,
+        })
+      });
+      if(!r.ok){
+        const err = await r.json().catch(()=>({}));
+        throw new Error(err.error?.message || `HTTP ${r.status}`);
+      }
+      const d = await r.json();
+      resp = d.choices?.[0]?.message?.content?.trim() || '';
+    } else {
+      // ── WebLLM ──
+      const reply = await webllmEngine.chat.completions.create({
+        messages: [{role:'system', content:sys}, ...convoHistory.slice(-4)],
+        temperature: 0.8,
+        max_tokens: 250,
+        stream: false,
+      });
+      resp = reply.choices[0].message.content?.trim() || '';
+    }
 
     if(resp.startsWith('SEARCH:')) {
       const q = resp.replace('SEARCH:','').trim();
@@ -1266,6 +1579,7 @@ async function startCam(stream) {
   camReady = true;
   $('cam-dot').classList.add('on');
   $('cam-lbl').textContent = 'LOADING HANDS...';
+  SFX.cameraOn();
   await initHandLandmarker();
   if(handTrackerReady) startHandLoop();
 }
@@ -1349,6 +1663,7 @@ function processHandResults(res){
   oc.clearRect(0,0,130,98);
 
   if(!res?.landmarks?.length){
+    if(handDetected) SFX.handLost(); // only fire when transitioning from detected→lost
     handDetected=false; handStr='NO HAND'; handConf=0; handLandmarks=[];
     pinchFrames=0; unpinchFrames=0; swipeHistory=[];
     if($('rd-hand'))$('rd-hand').textContent='--';
@@ -1357,6 +1672,7 @@ function processHandResults(res){
     return;
   }
 
+  if(!handDetected) SFX.handDetected(); // first frame hand appears
   handDetected=true;
   const numHands=res.landmarks.length;
 
@@ -1476,7 +1792,7 @@ function processHandResults(res){
 }
 
 function onSwipe(dir){
-  SFX.confirm();
+  SFX.swipe(dir);
   notif('SWIPE ' + dir.toUpperCase());
   // In 3D viewer: swipe rotates the model
   if(viewerOpen){
@@ -1892,15 +2208,23 @@ document.querySelectorAll('[data-m]').forEach(b=>{
     document.querySelectorAll('[data-m]').forEach(q=>q.classList.remove('on'));
     b.classList.add('on');
     const newModel = b.dataset.m;
-    if(newModel === currentModel) return;
+    const newProvider = b.dataset.p || 'webllm';
+    if(newModel === currentModel && newProvider === currentProvider) return;
     currentModel = newModel;
-    currentProvider = b.dataset.p || 'webllm';
-    if($('mlbl')) $('mlbl').textContent = b.textContent.replace('⚡','').trim();
-    notif('SWITCHING MODEL: '+b.textContent);
-    SFX.model();
-    // Reload WebLLM with new model
-    webllmEngine = null; webllmReady = false; webllmLoading = false;
-    setTimeout(()=>initWebLLM(currentModel), 300);
+    currentProvider = newProvider;
+    if($('mlbl')) $('mlbl').textContent = b.textContent.replace(/[⚡☁]/g,'').trim();
+    notif('SWITCHING: '+b.textContent.trim());
+    if(SFX.model) SFX.model();
+    if(currentProvider === 'openai'){
+      webllmEngine = null;
+      if(!openaiKey){ notif('OPENAI KEY REQUIRED','warn'); speak('Add your OpenAI API key in your profile.'); openProfile(); return; }
+      webllmReady = true;
+      notif('OPENAI READY — '+currentModel.toUpperCase());
+      speak('Switched to '+currentModel+'. Ready.');
+    } else {
+      webllmEngine = null; webllmReady = false; webllmLoading = false;
+      setTimeout(()=>initWebLLM(currentModel), 300);
+    }
   });
 });
 
@@ -1950,7 +2274,51 @@ function saveUser(name){
   try{ localStorage.setItem('jarvis_user', JSON.stringify({name, saved: Date.now()})); }catch(e){}
 }
 
-// ── USER PROFILE (localStorage) ──
+// ── OPENAI KEY ──
+let openaiKey = '';
+function loadOpenAIKey(){
+  try{ openaiKey = localStorage.getItem('jarvis_openai_key') || ''; }catch(e){}
+  updateOpenAIKeyStatus();
+}
+function saveOpenAIKey(){
+  const inp = document.getElementById('oai-key-input');
+  const key = inp?.value?.trim();
+  if(!key || !key.startsWith('sk-')){ notif('INVALID KEY — must start with sk-','warn'); return; }
+  openaiKey = key;
+  try{ localStorage.setItem('jarvis_openai_key', key); }catch(e){}
+  inp.value = '';
+  updateOpenAIKeyStatus();
+  notif('OPENAI KEY SAVED');
+  speak('OpenAI key saved. You can now select a GPT model.');
+}
+function clearOpenAIKey(){
+  openaiKey = '';
+  try{ localStorage.removeItem('jarvis_openai_key'); }catch(e){}
+  const inp = document.getElementById('oai-key-input');
+  if(inp) inp.value = '';
+  updateOpenAIKeyStatus();
+  notif('OPENAI KEY CLEARED');
+  if(currentProvider==='openai'){ currentProvider='webllm'; notif('SWITCHED BACK TO WEBLLM','warn'); }
+}
+function updateOpenAIKeyStatus(){
+  const el = document.getElementById('oai-key-status');
+  if(!el) return;
+  if(openaiKey){ el.textContent = 'KEY STORED — sk-...' + openaiKey.slice(-4).toUpperCase(); el.style.color='rgba(74,222,128,0.7)'; }
+  else { el.textContent = 'NO KEY STORED — SELECT A GPT MODEL ABOVE TO USE OPENAI'; el.style.color='rgba(74,222,128,0.3)'; }
+}
+function openProfile(){
+  const panel = $('profile-panel');
+  if(!panel) return;
+  // Show current key status when panel opens
+  updateOpenAIKeyStatus();
+  const inp = document.getElementById('oai-key-input');
+  if(inp) inp.placeholder = openaiKey ? '(key stored — paste new to replace)' : 'sk-...';
+  const data = loadProfile();
+  const container = $('profile-fields');
+  container.innerHTML = '';
+  data.forEach(f => addProfileFieldRow(f.label, f.value));
+  panel.style.display = 'block';
+}
 const PROFILE_DEFAULTS = [
   {key:'name',       label:'NAME',        value:''},
   {key:'age',        label:'AGE',         value:''},
@@ -1980,6 +2348,7 @@ function saveProfile(){
   const nameField = data.find(f=>f.key==='name'||f.key==='your_name');
   if(nameField?.value){ userName=nameField.value; if($('bot-user'))$('bot-user').textContent=userName.toUpperCase(); saveUser(userName); }
   closeProfile();
+  SFX.profileSave();
   notif('PROFILE SAVED');
   speak('Profile saved.');
 }
@@ -1990,19 +2359,116 @@ function getProfileContext(){
   return 'User profile: ' + data.filter(f=>f.value).map(f=>`${f.label}: ${f.value}`).join(', ');
 }
 
-function openProfile(){
-  const panel = $('profile-panel');
-  if(!panel) return;
-  const data = loadProfile();
-  const container = $('profile-fields');
-  container.innerHTML = '';
-  data.forEach(f => addProfileFieldRow(f.label, f.value));
-  panel.style.display = 'block';
-}
 
 function closeProfile(){
   const panel = $('profile-panel');
   if(panel) panel.style.display='none';
+}
+
+// ── COMMAND LIST ──
+const COMMAND_LIST = [
+  { name: 'PLAY MUSIC',       phrases: ['Play [song/artist]', 'Put on [song]', 'Play me [song]', 'I want to hear [song]', 'Listen to [artist]'],  action: 'play bohemian rhapsody' },
+  { name: 'PAUSE MUSIC',      phrases: ['Pause', 'Stop playing'],                                                                                   action: 'pause' },
+  { name: 'RESUME MUSIC',     phrases: ['Resume', 'Unpause', 'Keep playing', 'Play music'],                                                         action: 'resume' },
+  { name: 'STOP MUSIC',       phrases: ['Stop music', 'Close music', 'Turn off the music', 'No music'],                                             action: 'stop music' },
+  { name: 'VOLUME UP',        phrases: ['Volume up', 'Louder', 'Turn it up'],                                                                       action: 'volume up' },
+  { name: 'VOLUME DOWN',      phrases: ['Volume down', 'Quieter', 'Turn it down', 'Too loud'],                                                      action: 'volume down' },
+  { name: 'OPEN 3D FILE',     phrases: ['Open 3D file', 'Upload 3D file', 'Load model', 'Open model'],                                             action: 'open 3d file' },
+  { name: 'CLOSE 3D VIEWER',  phrases: ['Close 3D', 'Exit viewer', 'Close viewer', 'Close model'],                                                  action: 'close 3d' },
+  { name: 'OPEN PROFILE',     phrases: ['Open profile', 'Show my info', 'Edit profile', 'My profile'],                                              action: 'open profile' },
+  { name: 'WHAT TIME IS IT',  phrases: ["What's the time", 'What time is it'],                                                                      action: "what's the time" },
+  { name: 'WHAT DATE IS IT',  phrases: ["What's the date", 'What day is it'],                                                                       action: "what's the date" },
+  { name: 'WEATHER',          phrases: ['Weather', "How's outside", 'Temperature outside'],                                                         action: 'weather' },
+  { name: 'SYSTEM STATUS',    phrases: ['System status', 'Diagnostics', 'All systems', 'Run a check'],                                              action: 'system status' },
+  { name: 'SLEEP MODE',       phrases: ['Go to sleep', 'Sleep mode', 'Standby'],                                                                    action: 'go to sleep' },
+  { name: 'SEARCH THE WEB',   phrases: ['Search for [topic]', 'Look up [topic]', 'Google [topic]'],                                                 action: 'search for' },
+  { name: 'LOAD AI MODEL',    phrases: ['(Click a model button in the top bar)'],                                                                    action: null },
+  { name: 'WHAT ARE COMMANDS',phrases: ['What are the commands', 'What commands are there', 'List commands', 'Show commands'],                      action: 'what are the commands' },
+];
+
+function showCommandList(){
+  let overlay = document.getElementById('cmd-list-overlay');
+  if(overlay){ SFX.popupClose(); overlay.remove(); return; }
+  SFX.popupOpen();
+
+  overlay = document.createElement('div');
+  overlay.id = 'cmd-list-overlay';
+  overlay.style.cssText = `position:fixed;inset:0;z-index:400;display:flex;align-items:center;justify-content:center;background:rgba(0,3,12,0.88);backdrop-filter:blur(6px);`;
+
+  const panel = document.createElement('div');
+  panel.style.cssText = `background:rgba(0,5,18,0.98);border:1px solid rgba(0,216,255,0.3);border-radius:4px;
+    padding:0;min-width:380px;max-width:520px;max-height:80vh;display:flex;flex-direction:column;
+    font-family:'Share Tech Mono',monospace;box-shadow:0 0 60px rgba(0,216,255,0.07);overflow:hidden;`;
+
+  panel.innerHTML = `
+    <div style="padding:18px 24px 14px;border-bottom:1px solid rgba(0,216,255,0.1);display:flex;align-items:center;justify-content:space-between;flex-shrink:0">
+      <div>
+        <div style="font-family:'Orbitron',monospace;font-size:11px;letter-spacing:0.3em;color:#00d8ff">◈ COMMAND LIST</div>
+        <div style="font-size:7px;letter-spacing:0.15em;color:rgba(0,216,255,0.35);margin-top:4px">CLICK A COMMAND TO USE IT</div>
+      </div>
+      <span onclick="document.getElementById('cmd-list-overlay').remove()" style="cursor:pointer;color:rgba(0,216,255,0.4);font-size:16px;line-height:1;padding:4px 8px">✕</span>
+    </div>
+    <div id="cmd-list-body" style="overflow-y:auto;padding:10px 12px;display:flex;flex-direction:column;gap:4px"></div>`;
+
+  const body = panel.querySelector('#cmd-list-body');
+  COMMAND_LIST.forEach((cmd, idx) => {
+    const row = document.createElement('div');
+    row.style.cssText = `padding:9px 14px;border:1px solid rgba(0,216,255,0.1);border-radius:2px;
+      cursor:pointer;transition:background 0.15s,border-color 0.15s;display:flex;align-items:center;justify-content:space-between;`;
+    row.innerHTML = `
+      <span style="font-size:9px;letter-spacing:0.2em;color:#00d8ff">${cmd.name}</span>
+      <span style="font-size:9px;color:rgba(0,216,255,0.35)">›</span>`;
+    row.addEventListener('mouseover', ()=>{ row.style.background='rgba(0,216,255,0.06)'; row.style.borderColor='rgba(0,216,255,0.3)'; });
+    row.addEventListener('mouseout',  ()=>{ row.style.background=''; row.style.borderColor='rgba(0,216,255,0.1)'; });
+    row.addEventListener('click', ()=>{ showCommandDetail(cmd); });
+    body.appendChild(row);
+  });
+
+  overlay.appendChild(panel);
+  overlay.addEventListener('click', e=>{ if(e.target===overlay) overlay.remove(); });
+  document.body.appendChild(overlay);
+}
+
+function showCommandDetail(cmd){
+  let detail = document.getElementById('cmd-detail-overlay');
+  if(detail) detail.remove();
+  SFX.popupOpen();
+
+  detail = document.createElement('div');
+  detail.id = 'cmd-detail-overlay';
+  detail.style.cssText = `position:fixed;inset:0;z-index:500;display:flex;align-items:center;justify-content:center;background:rgba(0,2,10,0.7);backdrop-filter:blur(3px);`;
+
+  const phrasesHTML = cmd.phrases.map(p =>
+    `<div style="padding:6px 10px;border:1px solid rgba(0,216,255,0.12);border-radius:2px;
+      font-size:8px;letter-spacing:0.14em;color:rgba(0,216,255,0.7);background:rgba(0,216,255,0.03)">"${p}"</div>`
+  ).join('');
+
+  const useBtn = cmd.action
+    ? `<button onclick="
+        document.getElementById('cmd-detail-overlay').remove();
+        document.getElementById('cmd-list-overlay')?.remove();
+        handleCmd('${cmd.action.replace(/'/g,"\\'")}');
+      " style="width:100%;font-family:'Orbitron',monospace;font-size:9px;letter-spacing:0.25em;
+        color:#00d8ff;border:1px solid rgba(0,216,255,0.4);background:rgba(0,216,255,0.07);
+        padding:10px;cursor:pointer;border-radius:2px;margin-top:6px;transition:background 0.15s"
+       onmouseover="this.style.background='rgba(0,216,255,0.15)'" onmouseout="this.style.background='rgba(0,216,255,0.07)'">
+        ▸ USE COMMAND
+      </button>`
+    : `<div style="font-size:7px;letter-spacing:0.12em;color:rgba(0,216,255,0.3);text-align:center;margin-top:10px">USE THE UI BUTTON DIRECTLY</div>`;
+
+  detail.innerHTML = `
+    <div style="background:rgba(0,5,18,0.99);border:1px solid rgba(0,216,255,0.35);border-radius:4px;
+      padding:24px 28px;min-width:320px;max-width:460px;font-family:'Share Tech Mono',monospace;
+      box-shadow:0 0 80px rgba(0,216,255,0.09);">
+      <div style="font-family:'Orbitron',monospace;font-size:13px;letter-spacing:0.3em;color:#00d8ff;margin-bottom:18px">${cmd.name}</div>
+      <div style="font-size:7px;letter-spacing:0.2em;color:rgba(0,216,255,0.4);margin-bottom:10px">SAY ANY OF THE FOLLOWING:</div>
+      <div style="display:flex;flex-direction:column;gap:5px;margin-bottom:18px">${phrasesHTML}</div>
+      ${useBtn}
+      <div onclick="document.getElementById('cmd-detail-overlay').remove()" style="font-size:7px;letter-spacing:0.15em;color:rgba(0,216,255,0.3);cursor:pointer;text-align:center;margin-top:12px;text-decoration:underline">← BACK TO LIST</div>
+    </div>`;
+
+  detail.addEventListener('click', e=>{ if(e.target===detail) detail.remove(); });
+  document.body.appendChild(detail);
 }
 
 function addProfileField(){
@@ -2063,6 +2529,7 @@ function launchSystems(){
 }
 
 // Check localStorage first
+loadOpenAIKey();
 if(checkSavedUser()){
   // Returning user — skip identify screen immediately
   $('id').style.display='none';
@@ -2089,6 +2556,8 @@ if(checkSavedUser()){
   `;
   document.body.appendChild(wb);
   document.getElementById('wb-btn').addEventListener('click', function(){
+    SFX.auth();
+    setTimeout(startAmbience, 800);
     launchSystems();
     wb.style.transition='opacity 0.5s'; wb.style.opacity='0';
     setTimeout(()=>{ wb.style.display='none'; boot(); }, 550);
@@ -2105,6 +2574,8 @@ if(checkSavedUser()){
     userName = name;
     if($('bot-user')) $('bot-user').textContent = name.toUpperCase();
     saveUser(name);
+    SFX.auth();
+    setTimeout(startAmbience, 1000);
     this.textContent='LAUNCHING...'; this.disabled=true;
     launchSystems();
     $('id-fill').style.width='100%';
