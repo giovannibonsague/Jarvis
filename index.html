@@ -397,14 +397,7 @@ html,body{width:100%;height:100%;overflow:hidden;background:#000;cursor:none;
   </div>
 
   <div id="mrow">
-    <button class="mb on" data-m="Llama-3.2-1B-Instruct-q4f32_1-MLC" data-p="webllm">LLAMA 1B ⚡</button>
-    <button class="mb" data-m="Llama-3.2-3B-Instruct-q4f32_1-MLC" data-p="webllm">LLAMA 3B</button>
-    <button class="mb" data-m="Phi-3.5-mini-instruct-q4f16_1-MLC" data-p="webllm">PHI 3.5</button>
-    <button class="mb" data-m="gemma-2-2b-it-q4f32_1-MLC" data-p="webllm">GEMMA 2B</button>
-    <button class="mb" data-m="Mistral-7B-Instruct-v0.3-q4f16_1-MLC" data-p="webllm">MISTRAL 7B</button>
-    <button class="mb" data-m="gpt-4o-mini" data-p="openai" style="border-color:rgba(74,222,128,0.4);color:rgba(74,222,128,0.9)">GPT-4o MINI ☁</button>
-    <button class="mb" data-m="gpt-4o" data-p="openai" style="border-color:rgba(74,222,128,0.4);color:rgba(74,222,128,0.9)">GPT-4o ☁</button>
-    <button class="mb" data-m="gpt-4-turbo" data-p="openai" style="border-color:rgba(74,222,128,0.4);color:rgba(74,222,128,0.9)">GPT-4 TURBO ☁</button>
+    <button id="model-select-btn" onclick="showModelSelector()" style="font-family:var(--fo);font-size:8px;letter-spacing:0.2em;color:#00d8ff;border:1px solid rgba(0,216,255,0.3);background:rgba(0,216,255,0.04);padding:4px 16px;border-radius:2px;cursor:pointer;transition:all 0.2s" onmouseover="this.style.background='rgba(0,216,255,0.1)'" onmouseout="this.style.background='rgba(0,216,255,0.04)'">⬡ SELECT AI MODEL</button>
   </div>
 <div id="bot">
     <div class="bi">BATTERY&nbsp;
@@ -430,16 +423,7 @@ html,body{width:100%;height:100%;overflow:hidden;background:#000;cursor:none;
 <div id="profile-panel" style="display:none;position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:300;background:rgba(0,4,16,0.98);border:1px solid rgba(0,216,255,0.3);border-radius:4px;padding:28px 32px;min-width:360px;max-width:480px;font-family:'Share Tech Mono',monospace;box-shadow:0 0 60px rgba(0,216,255,0.06);">
   <div style="font-family:'Orbitron',monospace;font-size:11px;letter-spacing:0.3em;color:#00d8ff;margin-bottom:20px">◈ USER PROFILE</div>
   <div style="font-size:8px;letter-spacing:0.15em;color:rgba(0,216,255,0.4);margin-bottom:16px">SAVED LOCALLY · USED BY JARVIS AS CONTEXT</div>
-
-  <div style="margin-bottom:14px;padding-bottom:14px;border-bottom:1px solid rgba(0,216,255,0.1)">
-    <div style="font-size:8px;letter-spacing:0.2em;color:rgba(74,222,128,0.7);margin-bottom:8px">☁ OPENAI API KEY</div>
-    <div style="display:flex;gap:8px;align-items:center">
-      <input id="oai-key-input" type="password" placeholder="sk-..." style="flex:1;background:rgba(74,222,128,0.04);border:1px solid rgba(74,222,128,0.2);border-radius:2px;padding:6px 8px;font-family:'Share Tech Mono',monospace;font-size:8px;letter-spacing:0.1em;color:rgba(74,222,128,0.9);outline:none;">
-      <button onclick="saveOpenAIKey()" style="font-family:'Share Tech Mono',monospace;font-size:8px;letter-spacing:0.15em;color:rgba(74,222,128,0.8);border:1px solid rgba(74,222,128,0.3);background:rgba(74,222,128,0.05);padding:6px 12px;cursor:pointer;border-radius:2px;white-space:nowrap">SAVE KEY</button>
-      <button onclick="clearOpenAIKey()" style="font-family:'Share Tech Mono',monospace;font-size:8px;letter-spacing:0.15em;color:rgba(255,80,80,0.6);border:1px solid rgba(255,80,80,0.2);background:transparent;padding:6px 10px;cursor:pointer;border-radius:2px">✕</button>
-    </div>
-    <div id="oai-key-status" style="font-size:7px;letter-spacing:0.12em;color:rgba(74,222,128,0.4);margin-top:5px">NO KEY STORED — SELECT A GPT MODEL ABOVE TO USE OPENAI</div>
-  </div>
+  <div style="margin-bottom:14px;padding:10px 12px;border:1px solid rgba(0,216,255,0.08);border-radius:2px;font-size:7px;letter-spacing:0.13em;color:rgba(0,216,255,0.3)">☁ API KEYS — MANAGE IN <span onclick="closeProfile();showModelSelector();" style="color:#00d8ff;cursor:pointer;text-decoration:underline">SELECT AI MODEL</span></div>
   <div id="profile-fields" style="display:flex;flex-direction:column;gap:10px"></div>
   <div style="margin-top:16px;display:flex;gap:10px">
     <button onclick="addProfileField()" style="flex:1;font-family:'Share Tech Mono',monospace;font-size:8px;letter-spacing:0.15em;color:#00d8ff;border:1px solid rgba(0,216,255,0.3);background:rgba(0,216,255,0.05);padding:7px;cursor:pointer;border-radius:2px">+ ADD FIELD</button>
@@ -1459,16 +1443,19 @@ async function sendAI(msg) {
     return;
   }
 
-  if(currentProvider === 'openai' && !openaiKey) {
+  // Guard: cloud providers need a key
+  const cloudProviders = ['openai','anthropic','deepseek','grok'];
+  if(cloudProviders.includes(currentProvider) && !hasKey(currentProvider)){
     SFX.error();
-    speak(`No OpenAI API key stored. Open your profile and paste your key.`);
+    const pName = MODEL_PROVIDERS.find(p=>p.id===currentProvider)?.name || currentProvider;
+    speak(`No ${pName} API key stored. Select a model and add your key.`);
     setCoreState('idle');
     convoHistory.pop();
-    openProfile();
+    showModelSelector();
     return;
   }
 
-  // Build system prompt — includes user profile from localStorage
+  // Build system prompt
   const sysInfo = getFullSysInfo();
   const sys = `
 You are Jarvis, an AI assistant.
@@ -1505,48 +1492,65 @@ GOAL:
 Be efficient, intelligent, and reliable.
 `;
 
+  const messages = [{role:'system',content:sys}, ...convoHistory.slice(-4)];
+
   try {
     let resp = '';
 
-    if(currentProvider === 'openai') {
-      // ── OpenAI API ──
-      const r = await fetch('https://api.openai.com/v1/chat/completions', {
-        method: 'POST',
-        headers: { 'Content-Type':'application/json', 'Authorization':'Bearer '+openaiKey },
-        signal: AbortSignal.timeout(20000),
-        body: JSON.stringify({
-          model: currentModel,
-          messages: [{role:'system',content:sys}, ...convoHistory.slice(-4)],
-          max_tokens: 250,
-          temperature: 0.8,
-        })
+    if(currentProvider === 'openai'){
+      const r = await fetch('https://api.openai.com/v1/chat/completions',{
+        method:'POST', signal:AbortSignal.timeout(25000),
+        headers:{'Content-Type':'application/json','Authorization':'Bearer '+getProviderKey('openai')},
+        body:JSON.stringify({model:currentModel,messages,max_tokens:300,temperature:0.8})
       });
-      if(!r.ok){
-        const err = await r.json().catch(()=>({}));
-        throw new Error(err.error?.message || `HTTP ${r.status}`);
-      }
-      const d = await r.json();
-      resp = d.choices?.[0]?.message?.content?.trim() || '';
+      if(!r.ok){const e=await r.json().catch(()=>({}));throw new Error(e.error?.message||`HTTP ${r.status}`);}
+      resp = (await r.json()).choices?.[0]?.message?.content?.trim()||'';
+
+    } else if(currentProvider === 'anthropic'){
+      // Anthropic Messages API — system is separate, no system role in messages array
+      const r = await fetch('https://api.anthropic.com/v1/messages',{
+        method:'POST', signal:AbortSignal.timeout(25000),
+        headers:{'Content-Type':'application/json','x-api-key':getProviderKey('anthropic'),'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
+        body:JSON.stringify({model:currentModel,system:sys,messages:convoHistory.slice(-4).filter(m=>m.role!=='system'),max_tokens:300})
+      });
+      if(!r.ok){const e=await r.json().catch(()=>({}));throw new Error(e.error?.message||`HTTP ${r.status}`);}
+      resp = (await r.json()).content?.[0]?.text?.trim()||'';
+
+    } else if(currentProvider === 'deepseek'){
+      const r = await fetch('https://api.deepseek.com/chat/completions',{
+        method:'POST', signal:AbortSignal.timeout(25000),
+        headers:{'Content-Type':'application/json','Authorization':'Bearer '+getProviderKey('deepseek')},
+        body:JSON.stringify({model:currentModel,messages,max_tokens:300,temperature:0.8})
+      });
+      if(!r.ok){const e=await r.json().catch(()=>({}));throw new Error(e.error?.message||`HTTP ${r.status}`);}
+      resp = (await r.json()).choices?.[0]?.message?.content?.trim()||'';
+
+    } else if(currentProvider === 'grok'){
+      const r = await fetch('https://api.x.ai/v1/chat/completions',{
+        method:'POST', signal:AbortSignal.timeout(25000),
+        headers:{'Content-Type':'application/json','Authorization':'Bearer '+getProviderKey('grok')},
+        body:JSON.stringify({model:currentModel,messages,max_tokens:300,temperature:0.8})
+      });
+      if(!r.ok){const e=await r.json().catch(()=>({}));throw new Error(e.error?.message||`HTTP ${r.status}`);}
+      resp = (await r.json()).choices?.[0]?.message?.content?.trim()||'';
+
     } else {
-      // ── WebLLM ──
+      // WebLLM
       const reply = await webllmEngine.chat.completions.create({
-        messages: [{role:'system', content:sys}, ...convoHistory.slice(-4)],
-        temperature: 0.8,
-        max_tokens: 250,
-        stream: false,
+        messages, temperature:0.8, max_tokens:250, stream:false
       });
-      resp = reply.choices[0].message.content?.trim() || '';
+      resp = reply.choices[0].message.content?.trim()||'';
     }
 
-    if(resp.startsWith('SEARCH:')) {
-      const q = resp.replace('SEARCH:','').trim();
-      const result = await webSearch(q);
-      if(result) convoHistory.push({role:'assistant', content:result});
+    if(resp.startsWith('SEARCH:')){
+      const q=resp.replace('SEARCH:','').trim();
+      const result=await webSearch(q);
+      if(result) convoHistory.push({role:'assistant',content:result});
       SFX.processingEnd(); setCoreState('idle'); return;
     }
 
-    convoHistory.push({role:'assistant', content:resp});
-    if(convoHistory.length > 10) convoHistory = convoHistory.slice(-6);
+    convoHistory.push({role:'assistant',content:resp});
+    if(convoHistory.length>10) convoHistory=convoHistory.slice(-6);
     SFX.processingEnd();
     speak(resp);
 
@@ -2203,30 +2207,303 @@ function frame(ts){
 }
 
 // ── MODEL BUTTONS ──
-document.querySelectorAll('[data-m]').forEach(b=>{
-  b.addEventListener('click',()=>{
-    document.querySelectorAll('[data-m]').forEach(q=>q.classList.remove('on'));
-    b.classList.add('on');
-    const newModel = b.dataset.m;
-    const newProvider = b.dataset.p || 'webllm';
-    if(newModel === currentModel && newProvider === currentProvider) return;
-    currentModel = newModel;
-    currentProvider = newProvider;
-    if($('mlbl')) $('mlbl').textContent = b.textContent.replace(/[⚡☁]/g,'').trim();
-    notif('SWITCHING: '+b.textContent.trim());
-    if(SFX.model) SFX.model();
-    if(currentProvider === 'openai'){
-      webllmEngine = null;
-      if(!openaiKey){ notif('OPENAI KEY REQUIRED','warn'); speak('Add your OpenAI API key in your profile.'); openProfile(); return; }
-      webllmReady = true;
-      notif('OPENAI READY — '+currentModel.toUpperCase());
-      speak('Switched to '+currentModel+'. Ready.');
-    } else {
-      webllmEngine = null; webllmReady = false; webllmLoading = false;
-      setTimeout(()=>initWebLLM(currentModel), 300);
+
+// ── MODEL SELECTOR ──
+const MODEL_PROVIDERS = [
+  {
+    id: 'webllm', name: 'WebLLM', subtitle: 'Local · In-Browser · No API Key',
+    color: '#00d8ff', requiresKey: false,
+    groups: [
+      { label: 'LLAMA 3.2', models: [
+        { name: 'Llama 3.2 1B', id: 'Llama-3.2-1B-Instruct-q4f32_1-MLC', note: '~0.7GB · Fastest' },
+        { name: 'Llama 3.2 3B', id: 'Llama-3.2-3B-Instruct-q4f32_1-MLC', note: '~2GB' },
+      ]},
+      { label: 'LLAMA 3.1', models: [
+        { name: 'Llama 3.1 8B', id: 'Llama-3.1-8B-Instruct-q4f32_1-MLC', note: '~5GB' },
+      ]},
+      { label: 'PHI', models: [
+        { name: 'Phi 3.5 Mini', id: 'Phi-3.5-mini-instruct-q4f16_1-MLC', note: '~2.2GB' },
+      ]},
+      { label: 'GEMMA', models: [
+        { name: 'Gemma 2 2B', id: 'gemma-2-2b-it-q4f32_1-MLC', note: '~1.5GB' },
+      ]},
+      { label: 'MISTRAL', models: [
+        { name: 'Mistral 7B', id: 'Mistral-7B-Instruct-v0.3-q4f16_1-MLC', note: '~4.5GB' },
+      ]},
+      { label: 'QWEN', models: [
+        { name: 'Qwen2.5 0.5B', id: 'Qwen2.5-0.5B-Instruct-q4f16_1-MLC', note: '~0.4GB · Ultra fast' },
+        { name: 'Qwen2.5 1.5B', id: 'Qwen2.5-1.5B-Instruct-q4f16_1-MLC', note: '~1GB' },
+        { name: 'Qwen2.5 7B',   id: 'Qwen2.5-7B-Instruct-q4f16_1-MLC',   note: '~4.5GB' },
+      ]},
+    ]
+  },
+  {
+    id: 'openai', name: 'OpenAI', subtitle: 'Cloud · Requires API Key',
+    color: '#74dc8a', requiresKey: true, keyName: 'jarvis_openai_key', keyPrefix: 'sk-',
+    keyHint: 'platform.openai.com → API Keys',
+    groups: [
+      { label: 'GPT-5', models: [
+        { name: 'GPT-5',          id: 'gpt-5',               note: 'Most capable' },
+      ]},
+      { label: 'GPT-4o', models: [
+        { name: 'GPT-4o',         id: 'gpt-4o',              note: 'Fast + smart' },
+        { name: 'GPT-4o Mini',    id: 'gpt-4o-mini',         note: 'Fast · Cheap' },
+      ]},
+      { label: 'GPT-4', models: [
+        { name: 'GPT-4 Turbo',    id: 'gpt-4-turbo',         note: 'Large context' },
+        { name: 'GPT-4',          id: 'gpt-4',               note: 'Classic' },
+      ]},
+      { label: 'GPT-3.5', models: [
+        { name: 'GPT-3.5 Turbo',  id: 'gpt-3.5-turbo',       note: 'Fast · Very cheap' },
+      ]},
+      { label: 'o-SERIES', models: [
+        { name: 'o3',             id: 'o3',                  note: 'Deep reasoning' },
+        { name: 'o3 Mini',        id: 'o3-mini',             note: 'Fast reasoning' },
+        { name: 'o1',             id: 'o1',                  note: 'Reasoning' },
+        { name: 'o1 Mini',        id: 'o1-mini',             note: 'Fast reasoning' },
+      ]},
+    ]
+  },
+  {
+    id: 'anthropic', name: 'Anthropic', subtitle: 'Cloud · Requires API Key',
+    color: '#c084fc', requiresKey: true, keyName: 'jarvis_anthropic_key', keyPrefix: 'sk-ant-',
+    keyHint: 'console.anthropic.com → API Keys',
+    groups: [
+      { label: 'CLAUDE 4', models: [
+        { name: 'Claude Opus 4',   id: 'claude-opus-4-5',    note: 'Most capable' },
+        { name: 'Claude Sonnet 4', id: 'claude-sonnet-4-5',  note: 'Balanced' },
+      ]},
+      { label: 'CLAUDE 3.7', models: [
+        { name: 'Claude Sonnet 3.7', id: 'claude-3-7-sonnet-20250219', note: 'Extended thinking' },
+      ]},
+      { label: 'CLAUDE 3.5', models: [
+        { name: 'Claude Sonnet 3.5', id: 'claude-3-5-sonnet-20241022', note: 'Fast + smart' },
+        { name: 'Claude Haiku 3.5',  id: 'claude-3-5-haiku-20241022',  note: 'Fastest' },
+      ]},
+      { label: 'CLAUDE 3', models: [
+        { name: 'Claude Opus 3',   id: 'claude-3-opus-20240229',   note: 'Most powerful' },
+        { name: 'Claude Sonnet 3', id: 'claude-3-sonnet-20240229', note: 'Balanced' },
+        { name: 'Claude Haiku 3',  id: 'claude-3-haiku-20240307',  note: 'Fast' },
+      ]},
+    ]
+  },
+  {
+    id: 'deepseek', name: 'DeepSeek', subtitle: 'Cloud · Requires API Key',
+    color: '#38bdf8', requiresKey: true, keyName: 'jarvis_deepseek_key', keyPrefix: 'sk-',
+    keyHint: 'platform.deepseek.com → API Keys',
+    groups: [
+      { label: 'DEEPSEEK V3', models: [
+        { name: 'DeepSeek V3',    id: 'deepseek-chat',      note: 'Latest · Best' },
+      ]},
+      { label: 'DEEPSEEK R1', models: [
+        { name: 'DeepSeek R1',    id: 'deepseek-reasoner',  note: 'Reasoning model' },
+      ]},
+    ]
+  },
+  {
+    id: 'grok', name: 'Grok', subtitle: 'xAI Cloud · Requires API Key',
+    color: '#f472b6', requiresKey: true, keyName: 'jarvis_grok_key', keyPrefix: 'xai-',
+    keyHint: 'console.x.ai → API Keys',
+    groups: [
+      { label: 'GROK 3', models: [
+        { name: 'Grok 3',         id: 'grok-3',             note: 'Most capable' },
+        { name: 'Grok 3 Mini',    id: 'grok-3-mini',        note: 'Fast' },
+      ]},
+      { label: 'GROK 2', models: [
+        { name: 'Grok 2',         id: 'grok-2-1212',        note: 'Stable' },
+        { name: 'Grok 2 Vision',  id: 'grok-2-vision-1212', note: 'Multimodal' },
+      ]},
+      { label: 'GROK 1.5', models: [
+        { name: 'Grok Beta',      id: 'grok-beta',          note: 'Legacy' },
+      ]},
+    ]
+  },
+];
+
+// Per-provider key storage
+const apiKeys = {};
+function loadAllKeys(){
+  MODEL_PROVIDERS.forEach(p=>{
+    if(p.requiresKey && p.keyName){
+      try{ apiKeys[p.id] = localStorage.getItem(p.keyName) || ''; }catch(e){}
     }
   });
-});
+  // Legacy: load old openai key
+  if(!apiKeys.openai) try{ apiKeys.openai = localStorage.getItem('jarvis_openai_key') || ''; }catch(e){}
+}
+function saveProviderKey(providerId, key){
+  const p = MODEL_PROVIDERS.find(x=>x.id===providerId);
+  if(!p||!p.keyName) return;
+  apiKeys[providerId] = key;
+  try{ localStorage.setItem(p.keyName, key); }catch(e){}
+}
+function getProviderKey(providerId){ return apiKeys[providerId] || ''; }
+function hasKey(providerId){ return !!(apiKeys[providerId]); }
+
+function showModelSelector(){
+  SFX.popupOpen();
+  let overlay = document.getElementById('model-sel-overlay');
+  if(overlay){ SFX.popupClose(); overlay.remove(); return; }
+
+  overlay = document.createElement('div');
+  overlay.id = 'model-sel-overlay';
+  overlay.style.cssText = 'position:fixed;inset:0;z-index:500;display:flex;align-items:center;justify-content:center;background:rgba(0,3,12,0.9);backdrop-filter:blur(8px);';
+
+  const panel = document.createElement('div');
+  panel.style.cssText = 'background:rgba(0,5,18,0.99);border:1px solid rgba(0,216,255,0.25);border-radius:4px;padding:0;width:480px;max-height:82vh;display:flex;flex-direction:column;font-family:\'Share Tech Mono\',monospace;box-shadow:0 0 80px rgba(0,216,255,0.06);overflow:hidden;';
+
+  panel.innerHTML = `
+    <div style="padding:18px 24px 14px;border-bottom:1px solid rgba(0,216,255,0.1);display:flex;align-items:center;justify-content:space-between;flex-shrink:0">
+      <div>
+        <div style="font-family:'Orbitron',monospace;font-size:11px;letter-spacing:0.3em;color:#00d8ff">◈ SELECT AI MODEL</div>
+        <div style="font-size:7px;letter-spacing:0.15em;color:rgba(0,216,255,0.35);margin-top:3px">CURRENT: <span id="msel-current" style="color:#00d8ff">${currentModel}</span></div>
+      </div>
+      <span onclick="document.getElementById('model-sel-overlay').remove();SFX.popupClose();" style="cursor:pointer;color:rgba(0,216,255,0.4);font-size:16px;padding:4px 8px">✕</span>
+    </div>
+    <div style="overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:6px"></div>`;
+
+  const body = panel.querySelector('div[style*="overflow-y"]');
+
+  MODEL_PROVIDERS.forEach(provider => {
+    const hasK = !provider.requiresKey || hasKey(provider.id);
+    const card = document.createElement('div');
+    card.style.cssText = `border:1px solid rgba(${hexToRgb(provider.color)},0.2);border-radius:3px;padding:12px 16px;cursor:pointer;transition:all 0.15s;display:flex;align-items:center;justify-content:space-between;`;
+    card.innerHTML = `
+      <div>
+        <div style="font-family:'Orbitron',monospace;font-size:10px;letter-spacing:0.25em;color:${provider.color}">${provider.name}</div>
+        <div style="font-size:7px;letter-spacing:0.13em;color:rgba(0,216,255,0.35);margin-top:3px">${provider.subtitle}</div>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px">
+        ${provider.requiresKey ? `<span style="font-size:7px;letter-spacing:0.12em;color:${hasK?'rgba(74,220,128,0.7)':'rgba(255,120,80,0.6)'}">${hasK?'KEY ✓':'NO KEY'}</span>` : '<span style="font-size:7px;letter-spacing:0.12em;color:rgba(0,216,255,0.4)">LOCAL</span>'}
+        <span style="color:rgba(0,216,255,0.35);font-size:14px">›</span>
+      </div>`;
+    card.addEventListener('mouseover',()=>{ card.style.background=`rgba(${hexToRgb(provider.color)},0.06)`; card.style.borderColor=`rgba(${hexToRgb(provider.color)},0.4)`; });
+    card.addEventListener('mouseout', ()=>{ card.style.background=''; card.style.borderColor=`rgba(${hexToRgb(provider.color)},0.2)`; });
+    card.addEventListener('click', ()=>{ showProviderModels(provider); });
+    body.appendChild(card);
+  });
+
+  overlay.appendChild(panel);
+  overlay.addEventListener('click',e=>{ if(e.target===overlay){overlay.remove();SFX.popupClose();} });
+  document.body.appendChild(overlay);
+}
+
+function showProviderModels(provider){
+  SFX.popupOpen();
+  let detail = document.getElementById('model-provider-overlay');
+  if(detail) detail.remove();
+
+  detail = document.createElement('div');
+  detail.id = 'model-provider-overlay';
+  detail.style.cssText = 'position:fixed;inset:0;z-index:600;display:flex;align-items:center;justify-content:center;background:rgba(0,2,10,0.7);backdrop-filter:blur(4px);';
+
+  const hasK = !provider.requiresKey || hasKey(provider.id);
+
+  let keySection = '';
+  if(provider.requiresKey){
+    keySection = `
+      <div style="margin-bottom:16px;padding:12px 14px;border:1px solid rgba(${hexToRgb(provider.color)},0.15);border-radius:3px;background:rgba(${hexToRgb(provider.color)},0.03)">
+        <div style="font-size:7px;letter-spacing:0.18em;color:rgba(${hexToRgb(provider.color)},0.6);margin-bottom:8px">API KEY ${hasK?'<span style="color:rgba(74,220,128,0.8)">✓ STORED</span>':''}</div>
+        <div style="display:flex;gap:6px">
+          <input id="prov-key-input" type="password" placeholder="${provider.keyPrefix}..." style="flex:1;background:rgba(${hexToRgb(provider.color)},0.04);border:1px solid rgba(${hexToRgb(provider.color)},0.2);border-radius:2px;padding:6px 8px;font-family:'Share Tech Mono',monospace;font-size:8px;color:${provider.color};outline:none;letter-spacing:0.1em;">
+          <button onclick="saveModelProviderKey('${provider.id}')" style="font-family:'Share Tech Mono',monospace;font-size:7px;letter-spacing:0.15em;color:${provider.color};border:1px solid rgba(${hexToRgb(provider.color)},0.3);background:rgba(${hexToRgb(provider.color)},0.06);padding:6px 10px;cursor:pointer;border-radius:2px;white-space:nowrap">SAVE</button>
+        </div>
+        <div style="font-size:7px;letter-spacing:0.1em;color:rgba(${hexToRgb(provider.color)},0.3);margin-top:5px">${provider.keyHint||''}</div>
+      </div>`;
+  }
+
+  let groupsHTML = provider.groups.map(g=>`
+    <div style="margin-bottom:14px">
+      <div style="font-size:7px;letter-spacing:0.22em;color:rgba(${hexToRgb(provider.color)},0.45);margin-bottom:6px;padding-left:2px">${g.label}</div>
+      <div style="display:flex;flex-direction:column;gap:4px">
+        ${g.models.map(m=>`
+          <div onclick="selectModel('${provider.id}','${m.id}','${m.name.replace(/'/g,"\\'")}')"
+            style="padding:8px 12px;border:1px solid rgba(${hexToRgb(provider.color)},0.12);border-radius:2px;cursor:pointer;display:flex;align-items:center;justify-content:space-between;transition:all 0.12s;${currentModel===m.id?'background:rgba('+hexToRgb(provider.color)+',0.1);border-color:rgba('+hexToRgb(provider.color)+',0.5);':''}"
+            onmouseover="this.style.background='rgba(${hexToRgb(provider.color)},0.08)';this.style.borderColor='rgba(${hexToRgb(provider.color)},0.35)'"
+            onmouseout="this.style.background='${currentModel===m.id?'rgba('+hexToRgb(provider.color)+',0.1)':''}';this.style.borderColor='rgba(${hexToRgb(provider.color)},${currentModel===m.id?'0.5':'0.12'})'">
+            <span style="font-size:9px;letter-spacing:0.15em;color:${provider.color}">${m.name}${currentModel===m.id?' ◆':''}</span>
+            <span style="font-size:7px;letter-spacing:0.1em;color:rgba(${hexToRgb(provider.color)},0.4)">${m.note||''}</span>
+          </div>`).join('')}
+      </div>
+    </div>`).join('');
+
+  detail.innerHTML = `
+    <div style="background:rgba(0,5,18,0.99);border:1px solid rgba(${hexToRgb(provider.color)},0.3);border-radius:4px;padding:0;width:460px;max-height:84vh;display:flex;flex-direction:column;font-family:'Share Tech Mono',monospace;box-shadow:0 0 80px rgba(0,0,0,0.5);overflow:hidden;">
+      <div style="padding:16px 20px 12px;border-bottom:1px solid rgba(${hexToRgb(provider.color)},0.12);display:flex;align-items:center;justify-content:space-between;flex-shrink:0">
+        <div>
+          <div style="font-family:'Orbitron',monospace;font-size:13px;letter-spacing:0.3em;color:${provider.color}">${provider.name.toUpperCase()}</div>
+          <div style="font-size:7px;letter-spacing:0.13em;color:rgba(${hexToRgb(provider.color)},0.4);margin-top:3px">${provider.subtitle}</div>
+        </div>
+        <span onclick="document.getElementById('model-provider-overlay').remove();SFX.popupClose();" style="cursor:pointer;color:rgba(${hexToRgb(provider.color)},0.4);font-size:16px;padding:4px 8px">✕</span>
+      </div>
+      <div style="overflow-y:auto;padding:16px 20px">
+        ${keySection}
+        ${groupsHTML}
+      </div>
+      <div style="padding:10px 20px;border-top:1px solid rgba(${hexToRgb(provider.color)},0.1);font-size:7px;letter-spacing:0.12em;color:rgba(${hexToRgb(provider.color)},0.3);cursor:pointer;flex-shrink:0" onclick="document.getElementById('model-provider-overlay').remove();SFX.popupClose();">← BACK TO PROVIDERS</div>
+    </div>`;
+
+  detail.addEventListener('click',e=>{ if(e.target===detail){detail.remove();SFX.popupClose();} });
+  document.body.appendChild(detail);
+}
+
+function saveModelProviderKey(providerId){
+  const inp = document.getElementById('prov-key-input');
+  const key = inp?.value?.trim();
+  const p = MODEL_PROVIDERS.find(x=>x.id===providerId);
+  if(!key){ notif('PASTE YOUR API KEY FIRST','warn'); SFX.warn(); return; }
+  if(p?.keyPrefix && !key.startsWith(p.keyPrefix)){ notif('KEY FORMAT INVALID — should start with '+p.keyPrefix,'warn'); SFX.warn(); return; }
+  saveProviderKey(providerId, key);
+  if(providerId==='openai') openaiKey = key; // keep legacy compat
+  inp.value='';
+  SFX.profileSave();
+  notif((p?.name||providerId).toUpperCase()+' KEY SAVED');
+  // Refresh the panel
+  const overlay = document.getElementById('model-provider-overlay');
+  if(overlay){ overlay.remove(); showProviderModels(p); }
+}
+
+function selectModel(providerId, modelId, modelName){
+  const p = MODEL_PROVIDERS.find(x=>x.id===providerId);
+  if(p?.requiresKey && !hasKey(providerId)){
+    notif('API KEY REQUIRED FOR '+p.name.toUpperCase(),'warn');
+    SFX.warn();
+    speak('Please add your '+p.name+' API key first.');
+    document.getElementById('prov-key-input')?.focus();
+    return;
+  }
+
+  const changed = modelId !== currentModel || providerId !== currentProvider;
+  currentModel = modelId;
+  currentProvider = providerId;
+
+  if($('mlbl')) $('mlbl').textContent = modelName.toUpperCase();
+  if($('msel-current')) $('msel-current').textContent = modelId;
+  if(changed) SFX.model();
+  notif('MODEL: '+modelName.toUpperCase());
+
+  // Close both overlays
+  document.getElementById('model-provider-overlay')?.remove();
+  document.getElementById('model-sel-overlay')?.remove();
+
+  if(providerId === 'webllm'){
+    webllmEngine=null; webllmReady=false; webllmLoading=false;
+    setTimeout(()=>initWebLLM(currentModel),300);
+  } else {
+    webllmEngine=null; webllmReady=true; // cloud models are always "ready"
+    speak('Switched to '+modelName+'. Ready.');
+  }
+}
+
+// Legacy compat shim
+function openaiKeyCompat(){ return getProviderKey('openai'); }
+
+function hexToRgb(hex){
+  hex=hex.replace('#','');
+  if(hex.length===3)hex=hex.split('').map(c=>c+c).join('');
+  const n=parseInt(hex,16);
+  return `${(n>>16)&255},${(n>>8)&255},${n&255}`;
+}
 
 // ── BOOT SEQUENCE ──
 
@@ -2275,44 +2552,13 @@ function saveUser(name){
 }
 
 // ── OPENAI KEY ──
-let openaiKey = '';
-function loadOpenAIKey(){
-  try{ openaiKey = localStorage.getItem('jarvis_openai_key') || ''; }catch(e){}
-  updateOpenAIKeyStatus();
-}
-function saveOpenAIKey(){
-  const inp = document.getElementById('oai-key-input');
-  const key = inp?.value?.trim();
-  if(!key || !key.startsWith('sk-')){ notif('INVALID KEY — must start with sk-','warn'); return; }
-  openaiKey = key;
-  try{ localStorage.setItem('jarvis_openai_key', key); }catch(e){}
-  inp.value = '';
-  updateOpenAIKeyStatus();
-  notif('OPENAI KEY SAVED');
-  speak('OpenAI key saved. You can now select a GPT model.');
-}
-function clearOpenAIKey(){
-  openaiKey = '';
-  try{ localStorage.removeItem('jarvis_openai_key'); }catch(e){}
-  const inp = document.getElementById('oai-key-input');
-  if(inp) inp.value = '';
-  updateOpenAIKeyStatus();
-  notif('OPENAI KEY CLEARED');
-  if(currentProvider==='openai'){ currentProvider='webllm'; notif('SWITCHED BACK TO WEBLLM','warn'); }
-}
-function updateOpenAIKeyStatus(){
-  const el = document.getElementById('oai-key-status');
-  if(!el) return;
-  if(openaiKey){ el.textContent = 'KEY STORED — sk-...' + openaiKey.slice(-4).toUpperCase(); el.style.color='rgba(74,222,128,0.7)'; }
-  else { el.textContent = 'NO KEY STORED — SELECT A GPT MODEL ABOVE TO USE OPENAI'; el.style.color='rgba(74,222,128,0.3)'; }
-}
 function openProfile(){
   const panel = $('profile-panel');
   if(!panel) return;
   // Show current key status when panel opens
   updateOpenAIKeyStatus();
   const inp = document.getElementById('oai-key-input');
-  if(inp) inp.placeholder = openaiKey ? '(key stored — paste new to replace)' : 'sk-...';
+  if(inp) inp.placeholder = hasKey('openai') ? '(key stored — paste new to replace)' : 'sk-...';
   const data = loadProfile();
   const container = $('profile-fields');
   container.innerHTML = '';
@@ -2529,7 +2775,7 @@ function launchSystems(){
 }
 
 // Check localStorage first
-loadOpenAIKey();
+loadAllKeys(); // loads all provider API keys
 if(checkSavedUser()){
   // Returning user — skip identify screen immediately
   $('id').style.display='none';
