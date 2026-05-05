@@ -151,8 +151,9 @@ html,body{width:100%;height:100%;overflow:hidden;background:#000;cursor:none;
 
 /* MODEL ROW */
 #mrow{position:absolute;bottom:58px;left:50%;transform:translateX(-50%);
-  display:flex;gap:3px;pointer-events:auto;opacity:0.7;transition:opacity 0.2s}
+  display:flex;gap:3px;pointer-events:auto;opacity:0.7;transition:opacity 0.2s;z-index:20}
 #mrow:hover{opacity:1}
+#mrow *{pointer-events:auto}
 .mb{font-family:var(--f);font-size:7px;letter-spacing:0.1em;text-transform:uppercase;
   padding:2px 7px;border:1px solid rgba(0,216,255,0.12);background:transparent;
   color:rgba(0,150,190,0.5);border-radius:1px;cursor:pointer;transition:all 0.15s;pointer-events:auto}
@@ -397,7 +398,7 @@ html,body{width:100%;height:100%;overflow:hidden;background:#000;cursor:none;
   </div>
 
   <div id="mrow">
-    <button id="model-select-btn" onclick="showModelSelector()" style="font-family:var(--fo);font-size:8px;letter-spacing:0.2em;color:#00d8ff;border:1px solid rgba(0,216,255,0.3);background:rgba(0,216,255,0.04);padding:4px 16px;border-radius:2px;cursor:pointer;transition:all 0.2s" onmouseover="this.style.background='rgba(0,216,255,0.1)'" onmouseout="this.style.background='rgba(0,216,255,0.04)'">⬡ SELECT AI MODEL</button>
+    <button id="model-select-btn" style="font-family:var(--fo);font-size:8px;letter-spacing:0.2em;color:#00d8ff;border:1px solid rgba(0,216,255,0.3);background:rgba(0,216,255,0.04);padding:4px 16px;border-radius:2px;cursor:pointer;transition:all 0.2s;pointer-events:auto;" onmouseover="this.style.background='rgba(0,216,255,0.1)'" onmouseout="this.style.background='rgba(0,216,255,0.04)'">⬡ SELECT AI MODEL</button>
   </div>
 <div id="bot">
     <div class="bi">BATTERY&nbsp;
@@ -2514,6 +2515,10 @@ window.showProviderModels   = showProviderModels;
 window.saveModelProviderKey = saveModelProviderKey;
 window.selectModel          = selectModel;
 window.hasKey               = hasKey;
+
+// Wire model selector button via JS (not inline onclick — avoids pointer-events issues)
+const _msBtn = document.getElementById('model-select-btn');
+if(_msBtn) _msBtn.addEventListener('click', function(e){ e.stopPropagation(); showModelSelector(); });
 
 // ── BOOT SEQUENCE ──
 
