@@ -53,7 +53,7 @@ html,body{width:100%;height:100%;overflow:hidden;background:#000;cursor:none;
 
 
 /* notif */
-#notif{position:fixed;top:8px;left:50%;transform:translateX(-50%);z-index:200;
+#notif{position:fixed;top:8px;left:50%;transform:translateX(-50%);z-index:200;cursor:pointer;
   font-size:8px;letter-spacing:0.22em;text-transform:uppercase;
   background:rgba(0,3,10,0.96);border:1px solid rgba(0,216,255,0.25);
   border-radius:1px;padding:4px 14px;color:var(--c);
@@ -283,7 +283,14 @@ html,body{width:100%;height:100%;overflow:hidden;background:#000;cursor:none;
 
 <!-- permission prompt removed — permissions triggered directly from Enter keypress -->
 
-<div id="notif"></div>
+<div id="notif" onclick="toggleNotifHistory()"></div>
+<div id="notif-history-panel" style="display:none;position:fixed;top:44px;left:50%;transform:translateX(-50%);z-index:250;background:rgba(0,4,16,0.97);border:1px solid rgba(0,216,255,0.2);border-radius:3px;width:380px;max-height:280px;overflow-y:auto;font-family:'Share Tech Mono',monospace;">
+  <div style="padding:8px 14px;border-bottom:1px solid rgba(0,216,255,0.1);display:flex;justify-content:space-between;align-items:center;font-size:8px;letter-spacing:0.2em;color:rgba(0,216,255,0.5);">
+    <span style="font-family:'Orbitron',monospace;color:#00d8ff">NOTIFICATION LOG</span>
+    <span onclick="toggleNotifHistory()" style="cursor:pointer;color:rgba(0,216,255,0.4)">✕</span>
+  </div>
+  <div id="notif-history-body" style="padding:6px 0"></div>
+</div>
 
 <!-- UI -->
 <div id="ui">
@@ -303,12 +310,12 @@ html,body{width:100%;height:100%;overflow:hidden;background:#000;cursor:none;
     <div id="big-time">--:--</div>
     <div id="big-day">---</div>
     <div id="big-date-str">---</div>
-    <div class="wtemp" id="wtemp">--°C</div>
+    <div class="wtemp" id="wtemp">--°F</div>
     <div class="wcity" id="wcity">LOCATING...</div>
     <div class="wcond" id="wcond"></div>
     <div class="wrow">HUMIDITY&nbsp;<span id="whum">--%</span></div>
-    <div class="wrow">WIND&nbsp;<span id="wwind">-- KM/H</span></div>
-    <div class="wrow">PRESSURE&nbsp;<span id="wpres">-- MB</span></div>
+    <div class="wrow">WIND&nbsp;<span id="wwind">-- MPH</span></div>
+    <div class="wrow">PRESSURE&nbsp;<span id="wpres">-- IN HG</span></div>
     <div class="wrow">SUNRISE&nbsp;<span id="wrise">--:--</span></div>
     <div class="wrow">SUNSET&nbsp;<span id="wset">--:--</span></div>
     <div class="wrow" style="color:var(--a);margin-top:3px">TONIGHT</div>
@@ -466,6 +473,7 @@ html,body{width:100%;height:100%;overflow:hidden;background:#000;cursor:none;
   <button class="mctl" id="m-back">«10</button>
   <button class="mctl" id="m-play">▶</button>
   <button class="mctl" id="m-fwd">10»</button>
+  <button class="mctl" id="m-skip" title="Next track">⏭</button>
   <button class="mctl" id="m-stop" style="color:var(--r)">■</button>
   <input type="range" id="vol-sl" min="0" max="1" step="0.02" value="0.8">
 </div>
@@ -657,11 +665,6 @@ function setAmbienceVolume(v){
     if(bgAmbience.audio) bgAmbience.audio.volume=Math.max(0,Math.min(1,v*0.18));
     else if(bgAmbience.masterGain) bgAmbience.masterGain.gain.linearRampToValueAtTime(v*0.15,bgAmbience.a.currentTime+0.5);
   }catch(e){}
-}
-
-function setAmbienceVolume(v){ // 0-1
-  if(!bgAmbience)return;
-  try{ bgAmbience.masterGain.gain.linearRampToValueAtTime(v*0.025,bgAmbience.a.currentTime+0.5); }catch(e){}
 }
 
 const SFX={
@@ -1205,22 +1208,38 @@ function startProgressTracking(){
 // Music controls
 if($('m-play')) $('m-play').addEventListener('click',()=>{
   if(!ytIframe) return;
-  const state = ytIframe.getPlayerState();
-  if(state===1) ytIframe.pauseVideo(); else ytIframe.playVideo();
+  const state = ytIframe.getPlayerState?.();
+  if(state===1){ ytIframe.pauseVideo(); SFX.grab(); }
+  else { ytIframe.playVideo(); SFX.confirm(); }
 });
-if($('m-back')) $('m-back').addEventListener('click',()=>{ if(ytIframe) ytIframe.seekTo(Math.max(0,(ytIframe.getCurrentTime()||0)-10),true); });
-if($('m-fwd'))  $('m-fwd').addEventListener('click',()=>{ if(ytIframe) ytIframe.seekTo((ytIframe.getCurrentTime()||0)+10,true); });
+if($('m-back')) $('m-back').addEventListener('click',()=>{
+  if(ytIframe){ ytIframe.seekTo(Math.max(0,(ytIframe.getCurrentTime?.())||0)-10,true); SFX.swipe('left'); }
+});
+if($('m-fwd'))  $('m-fwd').addEventListener('click',()=>{
+  if(ytIframe){ ytIframe.seekTo((ytIframe.getCurrentTime?.())||0+10,true); SFX.swipe('right'); }
+});
+// Skip to next track in search playlist
+const mSkip = document.getElementById('m-skip');
+if(mSkip) mSkip.addEventListener('click',()=>{
+  if(ytIframe){ try{ ytIframe.nextVideo?.(); }catch(e){}  SFX.swipe('right'); notif('NEXT TRACK'); }
+});
 if($('m-stop')) $('m-stop').addEventListener('click',()=>{
+  SFX.fileClose();
   if(ytIframe){ ytIframe.stopVideo(); ytIframe.destroy(); ytIframe=null; }
+  const yw = document.getElementById('yt-wrap'); if(yw) yw.remove();
   clearInterval(musicProgressTimer);
-  $('music-player').classList.remove('on');
-  $('music-title').textContent='— NO TRACK —';
-  $('music-time').textContent='0:00 / 0:00';
-  $('music-progress-fill').style.width='0%';
+  if($('music-player')) $('music-player').classList.remove('on');
+  if($('music-title')) $('music-title').textContent='— NO TRACK —';
+  if($('music-time')) $('music-time').textContent='0:00 / 0:00';
+  if($('music-progress-fill')) $('music-progress-fill').style.width='0%';
   currentSong='';
 });
 if($('vol-sl')) $('vol-sl').addEventListener('input',e=>{
-  if(ytIframe && ytIframe.setVolume) ytIframe.setVolume(Math.round(e.target.value*100));
+  const v = parseFloat(e.target.value);
+  if(ytIframe && ytIframe.setVolume) ytIframe.setVolume(Math.round(v*100));
+  // Also scale ambience proportionally (ambience at ~20% of music volume)
+  setAmbienceVolume(v);
+  SFX.volumeChange(v);
 });
 
 // ══════════════════════════════════════════
@@ -2144,7 +2163,7 @@ function updateBattery(){
   navigator.getBattery().then(b=>{const p=Math.round(b.level*100);$('bat-pct').textContent=p+'%';$('rd-bat').textContent=p+'%';$('bat-fill').style.width=p+'%';$('bat-fill').style.background=p<20?'linear-gradient(90deg,#880022,var(--r))':p<40?'linear-gradient(90deg,#882200,var(--a))':'linear-gradient(90deg,var(--c2),var(--c))';$('rd-pow').textContent=b.charging?'CHARGING':'ON BATTERY';$('rd-pow').style.color=b.charging?'var(--g)':'var(--c)';$('bot-status').textContent=b.charging?'CHARGING':'BATTERY '+p+'%';$('bot-status').style.color=b.charging?'var(--g)':p<20?'var(--r)':'var(--c)';});
 }
 async function fetchWeather(){
-  try{const pos=await new Promise((res,rej)=>navigator.geolocation.getCurrentPosition(res,rej,{timeout:8000}));const {latitude:la,longitude:lo}=pos.coords;const r=await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${la}&longitude=${lo}&current_weather=true&hourly=relative_humidity_2m,surface_pressure&daily=sunrise,sunset&wind_speed_unit=kmh&timezone=auto`);const d=await r.json();const cw=d.current_weather;const CODES={0:'CLEAR',1:'MAINLY CLEAR',2:'PARTLY CLOUDY',3:'OVERCAST',45:'FOG',51:'DRIZZLE',61:'RAIN',63:'RAIN',65:'HEAVY RAIN',71:'SNOW',80:'SHOWERS',95:'THUNDERSTORM'};$('wtemp').textContent=Math.round(cw.temperature)+'°C';$('wcond').textContent=CODES[cw.weathercode]||'';$('wwind').textContent=Math.round(cw.windspeed)+' KM/H';if(d.hourly?.relative_humidity_2m)$('whum').textContent=d.hourly.relative_humidity_2m[0]+'%';if(d.hourly?.surface_pressure)$('wpres').textContent=d.hourly.surface_pressure[0].toFixed(0)+' MB';if(d.daily?.sunrise){$('wrise').textContent=new Date(d.daily.sunrise[0]).toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'});$('wset').textContent=new Date(d.daily.sunset[0]).toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'});}try{const g=await fetch(`https://nominatim.openstreetmap.org/reverse?lat=${la}&lon=${lo}&format=json`);const gd=await g.json();$('wcity').textContent=((gd.address.city||gd.address.town||gd.address.county||'')+' '+(gd.address.country_code||'')).toUpperCase().trim();}catch(e){}}catch(e){$('wcity').textContent='UNAVAILABLE';$('wtemp').textContent='--°C';}
+  try{const pos=await new Promise((res,rej)=>navigator.geolocation.getCurrentPosition(res,rej,{timeout:8000}));const {latitude:la,longitude:lo}=pos.coords;const r=await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${la}&longitude=${lo}&current_weather=true&hourly=relative_humidity_2m,surface_pressure&daily=sunrise,sunset&wind_speed_unit=mph&temperature_unit=fahrenheit&timezone=auto`);const d=await r.json();const cw=d.current_weather;const CODES={0:'CLEAR',1:'MAINLY CLEAR',2:'PARTLY CLOUDY',3:'OVERCAST',45:'FOG',51:'DRIZZLE',61:'RAIN',63:'RAIN',65:'HEAVY RAIN',71:'SNOW',80:'SHOWERS',95:'THUNDERSTORM'};$('wtemp').textContent=Math.round(cw.temperature)+'°F';$('wcond').textContent=CODES[cw.weathercode]||'';$('wwind').textContent=Math.round(cw.windspeed)+' MPH';if(d.hourly?.relative_humidity_2m)$('whum').textContent=d.hourly.relative_humidity_2m[0]+'%';if(d.hourly?.surface_pressure){const inHg=(d.hourly.surface_pressure[0]*0.02953).toFixed(2);$('wpres').textContent=inHg+' IN HG';}if(d.daily?.sunrise){$('wrise').textContent=new Date(d.daily.sunrise[0]).toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'});$('wset').textContent=new Date(d.daily.sunset[0]).toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'});}try{const g=await fetch(`https://nominatim.openstreetmap.org/reverse?lat=${la}&lon=${lo}&format=json`);const gd=await g.json();$('wcity').textContent=((gd.address.city||gd.address.town||gd.address.county||'')+' '+(gd.address.country_code||'')).toUpperCase().trim();}catch(e){}}catch(e){$('wcity').textContent='UNAVAILABLE';$('wtemp').textContent='--°F';}
 }
 
 // ── CLOCK + ANALOG ──
@@ -2163,7 +2182,52 @@ function setCoreState(s){coreState=s;const cols={idle:'var(--c)',listening:'var(
 
 // ── NOTIF ──
 let nt;
-function notif(msg,type=''){const el=$('notif');if(!el)return;el.textContent=msg;el.className='on'+(type?' '+type:'');clearTimeout(nt);nt=setTimeout(()=>el.className='',3200);}
+const notifHistory = [];
+function renderNotifHistory(){
+  const body = document.getElementById('notif-history-body');
+  if(!body) return;
+  body.innerHTML = notifHistory.length === 0
+    ? '<div style="padding:12px 14px;font-size:7px;letter-spacing:0.15em;color:rgba(0,216,255,0.25)">NO NOTIFICATIONS YET</div>'
+    : notifHistory.map(n=>`
+      <div style="padding:5px 14px;border-bottom:1px solid rgba(0,216,255,0.05);display:flex;gap:10px;align-items:baseline">
+        <span style="font-size:7px;color:rgba(0,216,255,0.3);white-space:nowrap">${n.time}</span>
+        <span style="font-size:8px;letter-spacing:0.1em;color:${n.type==='warn'?'rgba(255,140,60,0.8)':'rgba(0,216,255,0.7)'}">${n.msg}</span>
+      </div>`).join('');
+}
+
+function toggleNotifHistory(){
+  const panel = document.getElementById('notif-history-panel');
+  if(!panel) return;
+  if(panel.style.display === 'none'){
+    renderNotifHistory();
+    panel.style.display = 'block';
+    SFX.popupOpen();
+  } else {
+    panel.style.display = 'none';
+    SFX.popupClose();
+  }
+}
+
+// Close notif history when clicking elsewhere
+document.addEventListener('click', e=>{
+  const panel = document.getElementById('notif-history-panel');
+  const notifEl = document.getElementById('notif');
+  if(panel && panel.style.display !== 'none' && !panel.contains(e.target) && e.target !== notifEl){
+    panel.style.display = 'none';
+  }
+});
+function notif(msg, type=''){
+  const el=$('notif'); if(!el)return;
+  el.textContent=msg; el.className='on'+(type?' '+type:'');
+  clearTimeout(nt); nt=setTimeout(()=>el.className='',3200);
+  SFX.notif?.();
+  // Log to history
+  notifHistory.unshift({msg, type, time: new Date().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit',second:'2-digit'})});
+  if(notifHistory.length > 50) notifHistory.pop();
+  // Update history panel if open
+  const hp = document.getElementById('notif-history-panel');
+  if(hp && hp.style.display !== 'none') renderNotifHistory();
+}
 
 // ── MOUSE FALLBACK (only when no hand detected) ──
 document.addEventListener('mousemove',e=>{
@@ -2347,34 +2411,88 @@ const MODEL_PROVIDERS = [
     color:'#74dc8a', requiresKey:true, keyName:'jarvis_openai_key', keyPrefix:'sk-',
     keyHint:'platform.openai.com → API Keys',
     groups:[
-      { label:'GPT-4.5', models:[
-        {name:'GPT-4.5 Preview',     id:'gpt-4.5-preview',             note:'Most capable multimodal'},
+      { label:'FRONTIER', models:[
+        {name:'GPT-5.5',              id:'gpt-5.5',                    note:'New class of intelligence'},
+        {name:'GPT-5.5 Pro',          id:'gpt-5.5-pro',                note:'Smarter + more precise'},
+        {name:'GPT-5.4',              id:'gpt-5.4',                    note:'Affordable coding + pro'},
+        {name:'GPT-5.4 Pro',          id:'gpt-5.4-pro',                note:'Smarter 5.4'},
+        {name:'GPT-5.4 Mini',         id:'gpt-5.4-mini',               note:'Coding, computer use'},
+        {name:'GPT-5.4 Nano',         id:'gpt-5.4-nano',               note:'Cheapest 5.4 class'},
+        {name:'GPT-5',                id:'gpt-5',                      note:'Intelligent reasoning'},
+        {name:'GPT-5 Pro',            id:'gpt-5-pro',                  note:'More precise GPT-5'},
+        {name:'GPT-5 Mini',           id:'gpt-5-mini',                 note:'Low latency cost-sensitive'},
+        {name:'GPT-5 Nano',           id:'gpt-5-nano',                 note:'Fastest + cheapest GPT-5'},
+        {name:'GPT-5.3 Chat',         id:'gpt-5.3-chat-latest',        note:'GPT-5.3 in ChatGPT'},
+        {name:'GPT-5.2',              id:'gpt-5.2',                    note:'Previous frontier'},
+        {name:'GPT-5.2 Pro',          id:'gpt-5.2-pro',                note:'Previous pro'},
+        {name:'GPT-5.1',              id:'gpt-5.1',                    note:'Best coding+agentic'},
       ]},
-      { label:'GPT-4o', models:[
-        {name:'GPT-4o',              id:'gpt-4o',                      note:'Fast + smart · Vision'},
-        {name:'GPT-4o Mini',         id:'gpt-4o-mini',                 note:'Fast · Cheap · Vision'},
-        {name:'GPT-4o Audio',        id:'gpt-4o-audio-preview',        note:'Audio input/output'},
-        {name:'GPT-4o Realtime',     id:'gpt-4o-realtime-preview',     note:'Realtime streaming'},
-        {name:'ChatGPT-4o Latest',   id:'chatgpt-4o-latest',           note:'Latest ChatGPT version'},
+      { label:'GPT-4.x', models:[
+        {name:'GPT-4.1',              id:'gpt-4.1',                    note:'Smartest non-reasoning'},
+        {name:'GPT-4.1 Mini',         id:'gpt-4.1-mini',               note:'Smaller faster 4.1'},
+        {name:'GPT-4.1 Nano',         id:'gpt-4.1-nano',               note:'Fastest cheapest 4.1'},
+        {name:'GPT-4.5 Preview',      id:'gpt-4.5-preview',            note:'Deprecated'},
+        {name:'GPT-4o',               id:'gpt-4o',                     note:'Fast intelligent flexible'},
+        {name:'GPT-4o Mini',          id:'gpt-4o-mini',                note:'Fast affordable focused'},
+        {name:'GPT-4 Turbo',          id:'gpt-4-turbo',                note:'Deprecated'},
+        {name:'GPT-4',                id:'gpt-4',                      note:'Older high-intelligence'},
+        {name:'GPT-3.5 Turbo',        id:'gpt-3.5-turbo',              note:'Legacy · Deprecated'},
       ]},
-      { label:'GPT-4', models:[
-        {name:'GPT-4 Turbo',         id:'gpt-4-turbo',                 note:'128k context'},
-        {name:'GPT-4 Turbo Preview', id:'gpt-4-turbo-preview',         note:'Preview'},
-        {name:'GPT-4',               id:'gpt-4',                       note:'Classic'},
-        {name:'GPT-4 32k',           id:'gpt-4-32k',                   note:'32k context'},
+      { label:'O-SERIES (Reasoning)', models:[
+        {name:'o3 Pro',               id:'o3-pro',                     note:'o3 with more compute'},
+        {name:'o3',                   id:'o3',                         note:'Complex tasks'},
+        {name:'o4 Mini',              id:'o4-mini',                    note:'Fast cost-efficient reasoning'},
+        {name:'o3 Mini',              id:'o3-mini',                    note:'Small o3 alternative'},
+        {name:'o1 Pro',               id:'o1-pro',                     note:'o1 with more compute'},
+        {name:'o1',                   id:'o1',                         note:'Previous full reasoning'},
+        {name:'o1 Mini',              id:'o1-mini',                    note:'Small o1 alternative'},
+        {name:'o1 Preview',           id:'o1-preview',                 note:'Preview · Deprecated'},
+        {name:'o3 Deep Research',     id:'o3-deep-research',           note:'Deep research · Deprecated'},
+        {name:'o4 Mini Deep Research',id:'o4-mini-deep-research',      note:'Affordable deep research'},
       ]},
-      { label:'GPT-3.5', models:[
-        {name:'GPT-3.5 Turbo',       id:'gpt-3.5-turbo',               note:'Fast · Very cheap'},
-        {name:'GPT-3.5 Turbo 16k',   id:'gpt-3.5-turbo-16k',           note:'16k context'},
-        {name:'GPT-3.5 Turbo Instruct',id:'gpt-3.5-turbo-instruct',    note:'Completion mode'},
+      { label:'CODEX (Agentic Coding)', models:[
+        {name:'GPT-5.3 Codex',        id:'gpt-5.3-codex',              note:'Most capable agentic coding'},
+        {name:'GPT-5.2 Codex',        id:'gpt-5.2-codex',              note:'Long-horizon agentic'},
+        {name:'GPT-5.1 Codex',        id:'gpt-5.1-codex',              note:'Agentic coding · Deprecated'},
+        {name:'GPT-5.1 Codex Max',    id:'gpt-5.1-codex-max',          note:'Long running tasks'},
+        {name:'GPT-5.1 Codex Mini',   id:'gpt-5.1-codex-mini',         note:'Cost-effective coding'},
+        {name:'GPT-5 Codex',          id:'gpt-5-codex',                note:'GPT-5 for Codex · Deprecated'},
+        {name:'Codex Mini Latest',    id:'codex-mini-latest',          note:'Codex CLI · Deprecated'},
       ]},
-      { label:'o-SERIES (Reasoning)', models:[
-        {name:'o3',                  id:'o3',                          note:'Best reasoning'},
-        {name:'o3 Mini',             id:'o3-mini',                     note:'Fast reasoning · Cheap'},
-        {name:'o4 Mini',             id:'o4-mini',                     note:'Latest mini reasoning'},
-        {name:'o1',                  id:'o1',                          note:'Advanced reasoning'},
-        {name:'o1 Mini',             id:'o1-mini',                     note:'Fast reasoning'},
-        {name:'o1 Preview',          id:'o1-preview',                  note:'Preview'},
+      { label:'REALTIME + AUDIO', models:[
+        {name:'GPT Realtime 1.5',     id:'gpt-realtime-1.5',           note:'Best voice · Audio in/out'},
+        {name:'GPT Realtime',         id:'gpt-realtime',               note:'Realtime text + audio'},
+        {name:'GPT Realtime Mini',    id:'gpt-realtime-mini',          note:'Cost-efficient realtime'},
+        {name:'GPT Audio 1.5',        id:'gpt-audio-1.5',              note:'Best voice chat completions'},
+        {name:'GPT Audio',            id:'gpt-audio',                  note:'Audio in/out chat completions'},
+        {name:'GPT Audio Mini',       id:'gpt-audio-mini',             note:'Cost-efficient audio'},
+        {name:'GPT-4o Audio',         id:'gpt-4o-audio-preview',       note:'Audio-capable 4o · Deprecated'},
+        {name:'GPT-4o Realtime',      id:'gpt-4o-realtime-preview',    note:'Realtime 4o'},
+        {name:'GPT-4o Transcribe',    id:'gpt-4o-transcribe',          note:'Speech-to-text via 4o'},
+        {name:'GPT-4o Mini Transcribe',id:'gpt-4o-mini-transcribe',    note:'Smaller transcription'},
+        {name:'Whisper',              id:'whisper-1',                  note:'General speech recognition'},
+        {name:'TTS-1',                id:'tts-1',                      note:'Text-to-speech · Speed'},
+        {name:'TTS-1 HD',             id:'tts-1-hd',                   note:'Text-to-speech · Quality'},
+      ]},
+      { label:'IMAGE GENERATION', models:[
+        {name:'GPT Image 2',          id:'gpt-image-2',                note:'State-of-the-art image gen'},
+        {name:'GPT Image 1.5',        id:'gpt-image-1.5',              note:'Previous image gen'},
+        {name:'GPT Image 1',          id:'gpt-image-1',                note:'Deprecated'},
+        {name:'GPT Image 1 Mini',     id:'gpt-image-1-mini',           note:'Cost-efficient image'},
+        {name:'DALL·E 3',             id:'dall-e-3',                   note:'Deprecated'},
+        {name:'DALL·E 2',             id:'dall-e-2',                   note:'First image model · Deprecated'},
+      ]},
+      { label:'OPEN-WEIGHT (Apache 2.0)', models:[
+        {name:'GPT-OSS 120B',         id:'gpt-oss-120b',               note:'Most powerful · Fits H100'},
+        {name:'GPT-OSS 20B',          id:'gpt-oss-20b',                note:'Medium · Low latency'},
+      ]},
+      { label:'CHAT + LEGACY', models:[
+        {name:'Chat Latest',          id:'chat-latest',                note:'Latest ChatGPT instant'},
+        {name:'ChatGPT-4o',           id:'chatgpt-4o-latest',          note:'4o in ChatGPT · Deprecated'},
+        {name:'Computer Use Preview', id:'computer-use-preview',       note:'Computer use · Deprecated'},
+        {name:'GPT-4o Search',        id:'gpt-4o-search-preview',      note:'Web search · Deprecated'},
+        {name:'Babbage-002',          id:'babbage-002',                note:'GPT-3 replacement · Deprecated'},
+        {name:'Davinci-002',          id:'davinci-002',                note:'GPT-3 replacement · Deprecated'},
       ]},
     ]
   },
