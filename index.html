@@ -572,74 +572,91 @@ function pulse(f,count=3,interval=0.18,v=0.07){
 
 // ── BACKGROUND AMBIENCE ──
 function startAmbience(){
-  try{
-    if(bgAmbience) return; // already running
-    const a=ac();
-    const masterGain=a.createGain();
-    masterGain.gain.setValueAtTime(0,a.currentTime);
-    masterGain.gain.linearRampToValueAtTime(0.025,a.currentTime+4); // fade in slowly
-    masterGain.connect(a.destination);
+  if(bgAmbience) return;
 
-    const nodes=[];
+  // Use HTML5 Audio with a looping ambient/electronic track from a free CDN
+  // These are royalty-free ambient tracks that don't require CORS preflight
+  const TRACKS = [
+    'https://assets.mixkit.co/music/preview/mixkit-tech-house-vibes-130.mp3',
+    'https://assets.mixkit.co/music/preview/mixkit-deep-urban-623.mp3',
+    'https://assets.mixkit.co/music/preview/mixkit-hazy-after-hours-132.mp3',
+  ];
 
-    // Layer 1: deep sub drone (40Hz)
-    const sub=a.createOscillator(),subG=a.createGain();
-    sub.type='sine';sub.frequency.value=40;
-    subG.gain.value=0.4;sub.connect(subG);subG.connect(masterGain);sub.start();nodes.push(sub);
+  const audio = new Audio();
+  audio.loop = true;
+  audio.volume = 0;
+  audio.crossOrigin = 'anonymous';
 
-    // Layer 2: mid drone (80Hz)
-    const mid=a.createOscillator(),midG=a.createGain();
-    mid.type='sine';mid.frequency.value=80;
-    midG.gain.value=0.25;mid.connect(midG);midG.connect(masterGain);mid.start();nodes.push(mid);
+  // Pick a random track
+  const trackUrl = TRACKS[Math.floor(Math.random()*TRACKS.length)];
+  audio.src = trackUrl;
 
-    // Layer 3: high shimmer (160Hz + detune)
-    const hi=a.createOscillator(),hiG=a.createGain();
-    hi.type='sine';hi.frequency.value=160;hi.detune.value=8;
-    hiG.gain.value=0.12;hi.connect(hiG);hiG.connect(masterGain);hi.start();nodes.push(hi);
+  audio.play().then(()=>{
+    // Fade in over 4 seconds
+    let vol = 0;
+    const fadeIn = setInterval(()=>{
+      vol = Math.min(0.18, vol+0.005);
+      audio.volume = vol;
+      if(vol >= 0.18) clearInterval(fadeIn);
+    }, 100);
+    bgAmbience = { audio, stopped:false, timers:[] };
+  }).catch(()=>{
+    // Autoplay blocked or network error — try procedural fallback
+    bgAmbience = null;
+    startAmbienceProc();
+  });
 
-    // Layer 4: ultra-low pulse (0.15Hz LFO on volume) — breathing effect
-    const lfo=a.createOscillator(),lfoG=a.createGain();
-    lfo.type='sine';lfo.frequency.value=0.12;
-    lfoG.gain.value=0.015;lfo.connect(lfoG);lfoG.connect(masterGain.gain);lfo.start();nodes.push(lfo);
-
-    // Layer 5: subtle high-freq shimmer sweep (oscillating 800-1200Hz at very low vol)
-    const shimmer=a.createOscillator(),shimG=a.createGain();
-    shimmer.type='sine';shimmer.frequency.value=900;
-    shimG.gain.value=0.018;shimmer.connect(shimG);shimG.connect(masterGain);shimmer.start();nodes.push(shimmer);
-
-    // Slow shimmer frequency modulation
-    const shimLFO=a.createOscillator(),shimLFOG=a.createGain();
-    shimLFO.type='sine';shimLFO.frequency.value=0.07;
-    shimLFOG.gain.value=180;shimLFO.connect(shimLFOG);shimLFOG.connect(shimmer.frequency);shimLFO.start();nodes.push(shimLFO);
-
-    // Sparse high ping every ~8 seconds via recursive setTimeout
-    let ambiencePingRunning=true;
-    function ambiencePing(){
-      if(!ambiencePingRunning)return;
-      try{
-        const o=a.createOscillator(),g=a.createGain();
-        o.type='sine';o.frequency.value=1200+Math.random()*800;
-        g.gain.setValueAtTime(0,a.currentTime);
-        g.gain.linearRampToValueAtTime(0.018,a.currentTime+0.05);
-        g.gain.exponentialRampToValueAtTime(0.001,a.currentTime+1.8);
-        o.connect(g);g.connect(a.destination);
-        o.start();o.stop(a.currentTime+2);
-      }catch(e){}
-      setTimeout(ambiencePing,6000+Math.random()*6000);
-    }
-    setTimeout(ambiencePing,3000);
-
-    bgAmbience={nodes,masterGain,a,ambiencePingRunning:true};
-  }catch(e){ console.warn('Ambience failed:',e); }
+  audio.onerror = ()=>{ bgAmbience=null; startAmbienceProc(); };
 }
 
-function stopAmbience(){
+// Procedural fallback if audio CDN fails
+function startAmbienceProc(){
+  if(bgAmbience) return;
+  try{
+    const a=ac();
+    const NOTE={D3:146.83,F3:174.61,A3:220,Bb3:233.08,C4:261.63,D4:293.66,E4:329.63,F4:349.23,G4:392,A4:440,C5:523.25,D5:587.33,F5:698.46};
+    const CHORDS=[[NOTE.D3,NOTE.F3,NOTE.A3,NOTE.D4],[NOTE.Bb3,NOTE.D4,NOTE.F4],[NOTE.F3,NOTE.A3,NOTE.C4,NOTE.F4],[NOTE.C4,NOTE.E4,NOTE.G4]];
+    const BASS=[NOTE.D3,NOTE.Bb3,NOTE.F3,NOTE.C4];
+    const BPM=50,BEAT=60/BPM,CDUR=BEAT*16;
+    const master=a.createGain();
+    master.gain.setValueAtTime(0,a.currentTime);
+    master.gain.linearRampToValueAtTime(0.15,a.currentTime+5);
+    master.connect(a.destination);
+    const nodes=[]; let loop=0; const timers=[];
+    function sched(t){
+      const ci=loop%4,ch=CHORDS[ci],ba=BASS[ci];
+      ch.forEach((f,i)=>{try{const o=a.createOscillator(),g=a.createGain();o.type='sine';o.frequency.value=f;g.gain.setValueAtTime(0,t+i*0.05);g.gain.linearRampToValueAtTime(0.018,t+i*0.05+0.1);g.gain.exponentialRampToValueAtTime(0.0001,t+CDUR*0.9);o.connect(g);g.connect(master);o.start(t+i*0.05);o.stop(t+CDUR);nodes.push(o);}catch(e){}});
+      try{const o=a.createOscillator(),g=a.createGain();o.type='sine';o.frequency.value=ba;g.gain.setValueAtTime(0,t);g.gain.linearRampToValueAtTime(0.06,t+0.08);g.gain.exponentialRampToValueAtTime(0.0001,t+CDUR*0.85);o.connect(g);g.connect(master);o.start(t);o.stop(t+CDUR);nodes.push(o);}catch(e){}
+      loop++;
+      const tid=setTimeout(()=>{ if(!bgAmbience?.stopped) sched(a.currentTime+0.05); },((CDUR-BEAT)*1000));
+      timers.push(tid);
+    }
+    sched(a.currentTime+0.2);
+    bgAmbience={nodes,masterGain:master,a,stopped:false,timers,audio:null};
+  }catch(e){ console.warn('Ambience fallback failed:',e); }
+}function stopAmbience(){
   if(!bgAmbience) return;
   try{
-    bgAmbience.ambiencePingRunning=false;
-    bgAmbience.masterGain.gain.linearRampToValueAtTime(0,bgAmbience.a.currentTime+2);
-    setTimeout(()=>{ bgAmbience.nodes.forEach(n=>{try{n.stop();}catch(e){}});bgAmbience=null; },2500);
+    bgAmbience.stopped=true;
+    bgAmbience.timers?.forEach(t=>clearTimeout(t));
+    if(bgAmbience.audio){
+      // HTML5 Audio fade out
+      const aud=bgAmbience.audio;
+      const fadeOut=setInterval(()=>{aud.volume=Math.max(0,aud.volume-0.01);if(aud.volume<=0){aud.pause();aud.src='';clearInterval(fadeOut);}},80);
+    } else if(bgAmbience.masterGain){
+      bgAmbience.masterGain.gain.linearRampToValueAtTime(0,bgAmbience.a.currentTime+2);
+      setTimeout(()=>{ bgAmbience?.nodes?.forEach(n=>{try{n.stop();}catch(e){}})},2500);
+    }
+    bgAmbience=null;
   }catch(e){ bgAmbience=null; }
+}
+
+function setAmbienceVolume(v){
+  if(!bgAmbience) return;
+  try{
+    if(bgAmbience.audio) bgAmbience.audio.volume=Math.max(0,Math.min(1,v*0.18));
+    else if(bgAmbience.masterGain) bgAmbience.masterGain.gain.linearRampToValueAtTime(v*0.15,bgAmbience.a.currentTime+0.5);
+  }catch(e){}
 }
 
 function setAmbienceVolume(v){ // 0-1
@@ -1123,41 +1140,50 @@ async function playMusic(query){
   if($('music-title')) $('music-title').textContent = '\u266a ' + query;
   if($('music-player')) $('music-player').classList.add('on');
 
-  // Remove old player
   const old = document.getElementById('yt-wrap');
   if(old) old.remove();
   if(ytIframe){ try{ ytIframe.destroy(); }catch(e){} ytIframe=null; }
 
-  // Plain iframe — no JS API, no API key, no CORS.
-  // youtube.com/embed?listType=search&list=QUERY plays top search result automatically.
+  // Real YouTube IFrame API player with listType:search
+  // Must be visible (>0px) for autoplay to work in Chrome
   const wrap = document.createElement('div');
   wrap.id = 'yt-wrap';
-  wrap.style.cssText = 'position:fixed;bottom:0;right:0;width:2px;height:2px;overflow:hidden;z-index:1;pointer-events:none;opacity:0.01;';
-  const iframe = document.createElement('iframe');
-  iframe.id = 'yt-iframe';
-  iframe.width = '2';
-  iframe.height = '2';
-  iframe.allow = 'autoplay; encrypted-media';
-  iframe.setAttribute('allowfullscreen','');
-  iframe.src = 'https://www.youtube.com/embed?listType=search&list='+encodeURIComponent(query)+'&autoplay=1&controls=0&playsinline=1&rel=0&enablejsapi=1';
-  wrap.appendChild(iframe);
+  wrap.style.cssText = 'position:fixed;bottom:54px;right:0;width:1px;height:1px;overflow:hidden;z-index:1;';
+  const div = document.createElement('div');
+  div.id = 'yt-player-div';
+  wrap.appendChild(div);
   document.body.appendChild(wrap);
 
-  speak('Playing '+query+'.');
-  setCoreState('idle');
-  if($('m-play')) $('m-play').textContent = '\u275a\u275a';
+  loadYTApi();
+  const waitYT = cb => (window.YT && window.YT.Player) ? cb() : setTimeout(()=>waitYT(cb), 200);
 
-  // Stub controls via postMessage
-  ytIframe = {
-    _iframe: iframe,
-    _cmd(fn){ try{ iframe.contentWindow.postMessage(JSON.stringify({event:'command',func:fn,args:''}),'*'); }catch(ex){} },
-    pauseVideo(){ this._cmd('pauseVideo'); },
-    playVideo(){  this._cmd('playVideo');  },
-    stopVideo(){  this._cmd('stopVideo');  },
-    destroy(){    wrap.remove(); },
-    getPlayerState(){ return -1; },
-  };
+  waitYT(()=>{
+    try{
+      ytIframe = new YT.Player('yt-player-div', {
+        width: 1, height: 1,
+        playerVars:{ listType:'search', list:query, autoplay:1, controls:0, playsinline:1, rel:0, iv_load_policy:3 },
+        events:{
+          onReady(e){
+            e.target.setVolume(Math.round((($('vol-sl')?.value)||0.8)*100));
+            e.target.playVideo();
+            const vd=e.target.getVideoData?.();
+            if(vd?.title){ currentSong=vd.title; if($('music-title'))$('music-title').textContent='\u266a '+vd.title; notif('NOW PLAYING: '+vd.title.slice(0,40).toUpperCase()); }
+            speak('Playing '+query+'.'); setCoreState('idle');
+            if($('m-play'))$('m-play').textContent='\u275a\u275a';
+            startProgressTracking();
+          },
+          onStateChange(e){
+            if(e.data===1){ if($('m-play'))$('m-play').textContent='\u275a\u275a'; const vd=e.target.getVideoData?.(); if(vd?.title&&vd.title!==currentSong){currentSong=vd.title;if($('music-title'))$('music-title').textContent='\u266a '+vd.title;} }
+            if(e.data===2){ if($('m-play'))$('m-play').textContent='\u25b6'; }
+            if(e.data===0){ if($('m-play'))$('m-play').textContent='\u25b6'; clearInterval(musicProgressTimer); }
+          },
+          onError(e){ notif('YOUTUBE ERROR '+e.data,'warn'); speak("Could not play that. Try a different search."); setCoreState('idle'); }
+        }
+      });
+    }catch(err){ notif('Player error: '+err.message.slice(0,40),'warn'); speak('Music player failed.'); setCoreState('idle'); }
+  });
 }
+
 
 
 
@@ -1447,7 +1473,7 @@ async function sendAI(msg) {
   }
 
   // Guard: cloud providers need a key
-  const cloudProviders = ['openai','anthropic','deepseek','grok'];
+  const cloudProviders = ['openai','anthropic','deepseek','grok','google','mistral','cohere'];
   if(cloudProviders.includes(currentProvider) && !hasKey(currentProvider)){
     SFX.error();
     const pName = MODEL_PROVIDERS.find(p=>p.id===currentProvider)?.name || currentProvider;
@@ -1536,6 +1562,52 @@ Be efficient, intelligent, and reliable.
       });
       if(!r.ok){const e=await r.json().catch(()=>({}));throw new Error(e.error?.message||`HTTP ${r.status}`);}
       resp = (await r.json()).choices?.[0]?.message?.content?.trim()||'';
+
+    } else if(currentProvider === 'google'){
+      // Gemini uses a different API shape — contents array, no system role in messages
+      const geminiMessages = convoHistory.slice(-4).map(m=>({
+        role: m.role==='assistant'?'model':'user',
+        parts:[{text:m.content}]
+      }));
+      const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${currentModel}:generateContent?key=${getProviderKey('google')}`,{
+        method:'POST', signal:AbortSignal.timeout(25000),
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({
+          system_instruction:{parts:[{text:sys}]},
+          contents: geminiMessages,
+          generationConfig:{maxOutputTokens:300,temperature:0.8}
+        })
+      });
+      if(!r.ok){const e=await r.json().catch(()=>({}));throw new Error(e.error?.message||`HTTP ${r.status}`);}
+      resp = (await r.json()).candidates?.[0]?.content?.parts?.[0]?.text?.trim()||'';
+
+    } else if(currentProvider === 'mistral'){
+      const r = await fetch('https://api.mistral.ai/v1/chat/completions',{
+        method:'POST', signal:AbortSignal.timeout(25000),
+        headers:{'Content-Type':'application/json','Authorization':'Bearer '+getProviderKey('mistral')},
+        body:JSON.stringify({model:currentModel,messages,max_tokens:300,temperature:0.8})
+      });
+      if(!r.ok){const e=await r.json().catch(()=>({}));throw new Error(e.error?.message||`HTTP ${r.status}`);}
+      resp = (await r.json()).choices?.[0]?.message?.content?.trim()||'';
+
+    } else if(currentProvider === 'cohere'){
+      // Cohere uses chat endpoint with different format
+      const cohereHistory = convoHistory.slice(-4,-1).map(m=>({
+        role: m.role==='assistant'?'CHATBOT':'USER',
+        message: m.content
+      }));
+      const lastMsg = convoHistory[convoHistory.length-1]?.content || msg;
+      const r = await fetch('https://api.cohere.ai/v1/chat',{
+        method:'POST', signal:AbortSignal.timeout(25000),
+        headers:{'Content-Type':'application/json','Authorization':'Bearer '+getProviderKey('cohere')},
+        body:JSON.stringify({
+          model:currentModel, message:lastMsg,
+          preamble:sys, chat_history:cohereHistory,
+          max_tokens:300, temperature:0.8
+        })
+      });
+      if(!r.ok){const e=await r.json().catch(()=>({}));throw new Error(e.message||`HTTP ${r.status}`);}
+      resp = (await r.json()).text?.trim()||'';
 
     } else {
       // WebLLM
@@ -2215,110 +2287,216 @@ function frame(ts){
 
 const MODEL_PROVIDERS = [
   {
-    id: 'webllm', name: 'WebLLM', subtitle: 'Local · In-Browser · No API Key',
-    color: '#00d8ff', requiresKey: false,
-    groups: [
-      { label: 'LLAMA 3.2', models: [
-        { name: 'Llama 3.2 1B', id: 'Llama-3.2-1B-Instruct-q4f32_1-MLC', note: '~0.7GB · Fastest' },
-        { name: 'Llama 3.2 3B', id: 'Llama-3.2-3B-Instruct-q4f32_1-MLC', note: '~2GB' },
+    id:'webllm', name:'WebLLM', subtitle:'Local · In-Browser · No API Key · Requires WebGPU',
+    color:'#00d8ff', requiresKey:false,
+    groups:[
+      { label:'LLAMA 3.2', models:[
+        {name:'Llama 3.2 1B',  id:'Llama-3.2-1B-Instruct-q4f32_1-MLC',  note:'~0.7GB · Fastest'},
+        {name:'Llama 3.2 3B',  id:'Llama-3.2-3B-Instruct-q4f32_1-MLC',  note:'~2GB'},
       ]},
-      { label: 'LLAMA 3.1', models: [
-        { name: 'Llama 3.1 8B', id: 'Llama-3.1-8B-Instruct-q4f32_1-MLC', note: '~5GB' },
+      { label:'LLAMA 3.1', models:[
+        {name:'Llama 3.1 8B',  id:'Llama-3.1-8B-Instruct-q4f16_1-MLC',  note:'~5GB'},
+        {name:'Llama 3.1 70B', id:'Llama-3.1-70B-Instruct-q4f16_1-MLC', note:'~40GB · Needs high VRAM'},
       ]},
-      { label: 'PHI', models: [
-        { name: 'Phi 3.5 Mini', id: 'Phi-3.5-mini-instruct-q4f16_1-MLC', note: '~2.2GB' },
+      { label:'PHI', models:[
+        {name:'Phi 3.5 Mini',  id:'Phi-3.5-mini-instruct-q4f16_1-MLC',  note:'~2.2GB'},
+        {name:'Phi 3 Mini',    id:'Phi-3-mini-4k-instruct-q4f16_1-MLC', note:'~2GB'},
+        {name:'Phi 3.5 MoE',   id:'Phi-3.5-MoE-instruct-q4f16_1-MLC',  note:'~7GB'},
       ]},
-      { label: 'GEMMA', models: [
-        { name: 'Gemma 2 2B', id: 'gemma-2-2b-it-q4f32_1-MLC', note: '~1.5GB' },
+      { label:'GEMMA', models:[
+        {name:'Gemma 2 2B',    id:'gemma-2-2b-it-q4f32_1-MLC',          note:'~1.5GB'},
+        {name:'Gemma 2 9B',    id:'gemma-2-9b-it-q4f16_1-MLC',          note:'~6GB'},
+        {name:'Gemma 2 27B',   id:'gemma-2-27b-it-q4f16_1-MLC',         note:'~16GB'},
       ]},
-      { label: 'MISTRAL', models: [
-        { name: 'Mistral 7B', id: 'Mistral-7B-Instruct-v0.3-q4f16_1-MLC', note: '~4.5GB' },
+      { label:'MISTRAL', models:[
+        {name:'Mistral 7B v0.3',   id:'Mistral-7B-Instruct-v0.3-q4f16_1-MLC', note:'~4.5GB'},
+        {name:'Mistral Nemo 12B',  id:'Mistral-Nemo-Instruct-2407-q4f16_1-MLC',note:'~7GB'},
       ]},
-      { label: 'QWEN', models: [
-        { name: 'Qwen2.5 0.5B', id: 'Qwen2.5-0.5B-Instruct-q4f16_1-MLC', note: '~0.4GB · Ultra fast' },
-        { name: 'Qwen2.5 1.5B', id: 'Qwen2.5-1.5B-Instruct-q4f16_1-MLC', note: '~1GB' },
-        { name: 'Qwen2.5 7B',   id: 'Qwen2.5-7B-Instruct-q4f16_1-MLC',   note: '~4.5GB' },
+      { label:'QWEN', models:[
+        {name:'Qwen2.5 0.5B',  id:'Qwen2.5-0.5B-Instruct-q4f16_1-MLC', note:'~0.4GB'},
+        {name:'Qwen2.5 1.5B',  id:'Qwen2.5-1.5B-Instruct-q4f16_1-MLC', note:'~1GB'},
+        {name:'Qwen2.5 3B',    id:'Qwen2.5-3B-Instruct-q4f16_1-MLC',   note:'~2GB'},
+        {name:'Qwen2.5 7B',    id:'Qwen2.5-7B-Instruct-q4f16_1-MLC',   note:'~4.5GB'},
+        {name:'Qwen2.5 14B',   id:'Qwen2.5-14B-Instruct-q4f16_1-MLC',  note:'~9GB'},
+        {name:'Qwen2.5 32B',   id:'Qwen2.5-32B-Instruct-q4f16_1-MLC',  note:'~20GB'},
+        {name:'Qwen2.5 72B',   id:'Qwen2.5-72B-Instruct-q4f16_1-MLC',  note:'~43GB'},
+        {name:'Qwen2.5 Coder 7B', id:'Qwen2.5-Coder-7B-Instruct-q4f16_1-MLC', note:'~4.5GB · Code'},
+        {name:'Qwen2.5 Coder 32B',id:'Qwen2.5-Coder-32B-Instruct-q4f16_1-MLC',note:'~20GB · Code'},
       ]},
-    ]
-  },
-  {
-    id: 'openai', name: 'OpenAI', subtitle: 'Cloud · Requires API Key',
-    color: '#74dc8a', requiresKey: true, keyName: 'jarvis_openai_key', keyPrefix: 'sk-',
-    keyHint: 'platform.openai.com → API Keys',
-    groups: [
-      { label: 'GPT-5', models: [
-        { name: 'GPT-5',          id: 'gpt-5',               note: 'Most capable' },
+      { label:'DEEPSEEK (Local)', models:[
+        {name:'DeepSeek R1 Distill Llama 8B',  id:'DeepSeek-R1-Distill-Llama-8B-q4f32_1-MLC', note:'~5GB · Reasoning'},
+        {name:'DeepSeek R1 Distill Qwen 7B',   id:'DeepSeek-R1-Distill-Qwen-7B-q4f32_1-MLC',  note:'~4.5GB · Reasoning'},
+        {name:'DeepSeek R1 Distill Qwen 1.5B', id:'DeepSeek-R1-Distill-Qwen-1.5B-q4f32_1-MLC',note:'~1GB · Fast reasoning'},
       ]},
-      { label: 'GPT-4o', models: [
-        { name: 'GPT-4o',         id: 'gpt-4o',              note: 'Fast + smart' },
-        { name: 'GPT-4o Mini',    id: 'gpt-4o-mini',         note: 'Fast · Cheap' },
+      { label:'SMOLLM', models:[
+        {name:'SmolLM2 135M',   id:'SmolLM2-135M-Instruct-q4f16_1-MLC', note:'~0.1GB · Ultra tiny'},
+        {name:'SmolLM2 360M',   id:'SmolLM2-360M-Instruct-q4f16_1-MLC', note:'~0.25GB'},
+        {name:'SmolLM2 1.7B',   id:'SmolLM2-1.7B-Instruct-q4f16_1-MLC', note:'~1GB'},
       ]},
-      { label: 'GPT-4', models: [
-        { name: 'GPT-4 Turbo',    id: 'gpt-4-turbo',         note: 'Large context' },
-        { name: 'GPT-4',          id: 'gpt-4',               note: 'Classic' },
+      { label:'STABLELM', models:[
+        {name:'StableLM 2 Zephyr 1.6B', id:'stablelm-2-zephyr-1_6b-q4f16_1-MLC', note:'~1GB'},
       ]},
-      { label: 'GPT-3.5', models: [
-        { name: 'GPT-3.5 Turbo',  id: 'gpt-3.5-turbo',       note: 'Fast · Very cheap' },
-      ]},
-      { label: 'o-SERIES', models: [
-        { name: 'o3',             id: 'o3',                  note: 'Deep reasoning' },
-        { name: 'o3 Mini',        id: 'o3-mini',             note: 'Fast reasoning' },
-        { name: 'o1',             id: 'o1',                  note: 'Reasoning' },
-        { name: 'o1 Mini',        id: 'o1-mini',             note: 'Fast reasoning' },
-      ]},
-    ]
-  },
-  {
-    id: 'anthropic', name: 'Anthropic', subtitle: 'Cloud · Requires API Key',
-    color: '#c084fc', requiresKey: true, keyName: 'jarvis_anthropic_key', keyPrefix: 'sk-ant-',
-    keyHint: 'console.anthropic.com → API Keys',
-    groups: [
-      { label: 'CLAUDE 4', models: [
-        { name: 'Claude Opus 4',   id: 'claude-opus-4-5',    note: 'Most capable' },
-        { name: 'Claude Sonnet 4', id: 'claude-sonnet-4-5',  note: 'Balanced' },
-      ]},
-      { label: 'CLAUDE 3.7', models: [
-        { name: 'Claude Sonnet 3.7', id: 'claude-3-7-sonnet-20250219', note: 'Extended thinking' },
-      ]},
-      { label: 'CLAUDE 3.5', models: [
-        { name: 'Claude Sonnet 3.5', id: 'claude-3-5-sonnet-20241022', note: 'Fast + smart' },
-        { name: 'Claude Haiku 3.5',  id: 'claude-3-5-haiku-20241022',  note: 'Fastest' },
-      ]},
-      { label: 'CLAUDE 3', models: [
-        { name: 'Claude Opus 3',   id: 'claude-3-opus-20240229',   note: 'Most powerful' },
-        { name: 'Claude Sonnet 3', id: 'claude-3-sonnet-20240229', note: 'Balanced' },
-        { name: 'Claude Haiku 3',  id: 'claude-3-haiku-20240307',  note: 'Fast' },
+      { label:'INTERNLM', models:[
+        {name:'InternLM2.5 7B',  id:'internlm2_5-7b-chat-q4f16_1-MLC',  note:'~4.5GB'},
+        {name:'InternLM2.5 20B', id:'internlm2_5-20b-chat-q4f16_1-MLC', note:'~12GB'},
       ]},
     ]
   },
   {
-    id: 'deepseek', name: 'DeepSeek', subtitle: 'Cloud · Requires API Key',
-    color: '#38bdf8', requiresKey: true, keyName: 'jarvis_deepseek_key', keyPrefix: 'sk-',
-    keyHint: 'platform.deepseek.com → API Keys',
-    groups: [
-      { label: 'DEEPSEEK V3', models: [
-        { name: 'DeepSeek V3',    id: 'deepseek-chat',      note: 'Latest · Best' },
+    id:'openai', name:'OpenAI', subtitle:'Cloud · Requires API Key',
+    color:'#74dc8a', requiresKey:true, keyName:'jarvis_openai_key', keyPrefix:'sk-',
+    keyHint:'platform.openai.com → API Keys',
+    groups:[
+      { label:'GPT-4.5', models:[
+        {name:'GPT-4.5 Preview',     id:'gpt-4.5-preview',             note:'Most capable multimodal'},
       ]},
-      { label: 'DEEPSEEK R1', models: [
-        { name: 'DeepSeek R1',    id: 'deepseek-reasoner',  note: 'Reasoning model' },
+      { label:'GPT-4o', models:[
+        {name:'GPT-4o',              id:'gpt-4o',                      note:'Fast + smart · Vision'},
+        {name:'GPT-4o Mini',         id:'gpt-4o-mini',                 note:'Fast · Cheap · Vision'},
+        {name:'GPT-4o Audio',        id:'gpt-4o-audio-preview',        note:'Audio input/output'},
+        {name:'GPT-4o Realtime',     id:'gpt-4o-realtime-preview',     note:'Realtime streaming'},
+        {name:'ChatGPT-4o Latest',   id:'chatgpt-4o-latest',           note:'Latest ChatGPT version'},
+      ]},
+      { label:'GPT-4', models:[
+        {name:'GPT-4 Turbo',         id:'gpt-4-turbo',                 note:'128k context'},
+        {name:'GPT-4 Turbo Preview', id:'gpt-4-turbo-preview',         note:'Preview'},
+        {name:'GPT-4',               id:'gpt-4',                       note:'Classic'},
+        {name:'GPT-4 32k',           id:'gpt-4-32k',                   note:'32k context'},
+      ]},
+      { label:'GPT-3.5', models:[
+        {name:'GPT-3.5 Turbo',       id:'gpt-3.5-turbo',               note:'Fast · Very cheap'},
+        {name:'GPT-3.5 Turbo 16k',   id:'gpt-3.5-turbo-16k',           note:'16k context'},
+        {name:'GPT-3.5 Turbo Instruct',id:'gpt-3.5-turbo-instruct',    note:'Completion mode'},
+      ]},
+      { label:'o-SERIES (Reasoning)', models:[
+        {name:'o3',                  id:'o3',                          note:'Best reasoning'},
+        {name:'o3 Mini',             id:'o3-mini',                     note:'Fast reasoning · Cheap'},
+        {name:'o4 Mini',             id:'o4-mini',                     note:'Latest mini reasoning'},
+        {name:'o1',                  id:'o1',                          note:'Advanced reasoning'},
+        {name:'o1 Mini',             id:'o1-mini',                     note:'Fast reasoning'},
+        {name:'o1 Preview',          id:'o1-preview',                  note:'Preview'},
       ]},
     ]
   },
   {
-    id: 'grok', name: 'Grok', subtitle: 'xAI Cloud · Requires API Key',
-    color: '#f472b6', requiresKey: true, keyName: 'jarvis_grok_key', keyPrefix: 'xai-',
-    keyHint: 'console.x.ai → API Keys',
-    groups: [
-      { label: 'GROK 3', models: [
-        { name: 'Grok 3',         id: 'grok-3',             note: 'Most capable' },
-        { name: 'Grok 3 Mini',    id: 'grok-3-mini',        note: 'Fast' },
+    id:'anthropic', name:'Anthropic', subtitle:'Cloud · Requires API Key',
+    color:'#c084fc', requiresKey:true, keyName:'jarvis_anthropic_key', keyPrefix:'sk-ant-',
+    keyHint:'console.anthropic.com → API Keys',
+    groups:[
+      { label:'CLAUDE 4', models:[
+        {name:'Claude Opus 4',       id:'claude-opus-4-5',             note:'Most capable'},
+        {name:'Claude Sonnet 4',     id:'claude-sonnet-4-5',           note:'Balanced · Fast'},
       ]},
-      { label: 'GROK 2', models: [
-        { name: 'Grok 2',         id: 'grok-2-1212',        note: 'Stable' },
-        { name: 'Grok 2 Vision',  id: 'grok-2-vision-1212', note: 'Multimodal' },
+      { label:'CLAUDE 3.7', models:[
+        {name:'Claude Sonnet 3.7',   id:'claude-3-7-sonnet-20250219',  note:'Extended thinking'},
       ]},
-      { label: 'GROK 1.5', models: [
-        { name: 'Grok Beta',      id: 'grok-beta',          note: 'Legacy' },
+      { label:'CLAUDE 3.5', models:[
+        {name:'Claude Sonnet 3.5 v2',id:'claude-3-5-sonnet-20241022',  note:'Smartest 3.5'},
+        {name:'Claude Sonnet 3.5 v1',id:'claude-3-5-sonnet-20240620',  note:'Stable'},
+        {name:'Claude Haiku 3.5',    id:'claude-3-5-haiku-20241022',   note:'Fastest · Cheapest'},
+      ]},
+      { label:'CLAUDE 3', models:[
+        {name:'Claude Opus 3',       id:'claude-3-opus-20240229',      note:'Powerful · Expensive'},
+        {name:'Claude Sonnet 3',     id:'claude-3-sonnet-20240229',    note:'Balanced'},
+        {name:'Claude Haiku 3',      id:'claude-3-haiku-20240307',     note:'Fast · Cheap'},
+      ]},
+    ]
+  },
+  {
+    id:'deepseek', name:'DeepSeek', subtitle:'Cloud · Requires API Key',
+    color:'#38bdf8', requiresKey:true, keyName:'jarvis_deepseek_key', keyPrefix:'sk-',
+    keyHint:'platform.deepseek.com → API Keys',
+    groups:[
+      { label:'DEEPSEEK V3', models:[
+        {name:'DeepSeek V3',         id:'deepseek-chat',               note:'Best general · Latest'},
+      ]},
+      { label:'DEEPSEEK R1 (Reasoning)', models:[
+        {name:'DeepSeek R1',         id:'deepseek-reasoner',           note:'Full reasoning model'},
+      ]},
+    ]
+  },
+  {
+    id:'grok', name:'Grok (xAI)', subtitle:'Cloud · Requires API Key',
+    color:'#f472b6', requiresKey:true, keyName:'jarvis_grok_key', keyPrefix:'xai-',
+    keyHint:'console.x.ai → API Keys',
+    groups:[
+      { label:'GROK 3', models:[
+        {name:'Grok 3',              id:'grok-3',                      note:'Most capable'},
+        {name:'Grok 3 Fast',         id:'grok-3-fast',                 note:'Faster response'},
+        {name:'Grok 3 Mini',         id:'grok-3-mini',                 note:'Efficient'},
+        {name:'Grok 3 Mini Fast',    id:'grok-3-mini-fast',            note:'Fastest · Cheap'},
+      ]},
+      { label:'GROK 2', models:[
+        {name:'Grok 2 Latest',       id:'grok-2-latest',               note:'Stable latest'},
+        {name:'Grok 2',              id:'grok-2-1212',                 note:'Dec 2024'},
+        {name:'Grok 2 Vision',       id:'grok-2-vision-1212',          note:'Vision · Dec 2024'},
+        {name:'Grok 2 Image',        id:'grok-2-image-1212',           note:'Image generation'},
+      ]},
+      { label:'GROK 1.5', models:[
+        {name:'Grok Beta',           id:'grok-beta',                   note:'Legacy stable'},
+        {name:'Grok Vision Beta',    id:'grok-vision-beta',            note:'Legacy vision'},
+      ]},
+    ]
+  },
+  {
+    id:'google', name:'Google Gemini', subtitle:'Cloud · Requires API Key',
+    color:'#fb923c', requiresKey:true, keyName:'jarvis_google_key', keyPrefix:'AIza',
+    keyHint:'aistudio.google.com → Get API Key',
+    groups:[
+      { label:'GEMINI 2.5', models:[
+        {name:'Gemini 2.5 Pro',       id:'gemini-2.5-pro-preview-05-06',  note:'Best · Thinking'},
+        {name:'Gemini 2.5 Flash',     id:'gemini-2.5-flash-preview-05-20',note:'Fast · Thinking'},
+      ]},
+      { label:'GEMINI 2.0', models:[
+        {name:'Gemini 2.0 Flash',     id:'gemini-2.0-flash',              note:'Fast · Multimodal'},
+        {name:'Gemini 2.0 Flash Lite',id:'gemini-2.0-flash-lite',         note:'Lightest · Cheap'},
+        {name:'Gemini 2.0 Flash Thinking',id:'gemini-2.0-flash-thinking-exp',note:'Experimental thinking'},
+      ]},
+      { label:'GEMINI 1.5', models:[
+        {name:'Gemini 1.5 Pro',       id:'gemini-1.5-pro',                note:'1M token context'},
+        {name:'Gemini 1.5 Flash',     id:'gemini-1.5-flash',              note:'Fast multimodal'},
+        {name:'Gemini 1.5 Flash 8B',  id:'gemini-1.5-flash-8b',           note:'Smallest · Cheapest'},
+      ]},
+    ]
+  },
+  {
+    id:'mistral', name:'Mistral AI', subtitle:'Cloud · Requires API Key',
+    color:'#f59e0b', requiresKey:true, keyName:'jarvis_mistral_key', keyPrefix:'',
+    keyHint:'console.mistral.ai → API Keys',
+    groups:[
+      { label:'FRONTIER', models:[
+        {name:'Mistral Large 2',      id:'mistral-large-latest',          note:'Best · 128k context'},
+        {name:'Mistral Medium 3',     id:'mistral-medium-latest',         note:'Balanced'},
+        {name:'Pixtral Large',        id:'pixtral-large-latest',          note:'Vision · Large'},
+      ]},
+      { label:'EFFICIENT', models:[
+        {name:'Mistral Small 3.1',    id:'mistral-small-latest',          note:'Fast · Cheap'},
+        {name:'Mistral Nemo',         id:'open-mistral-nemo',             note:'12B · OSS'},
+        {name:'Codestral',            id:'codestral-latest',              note:'Code specialist'},
+        {name:'Pixtral 12B',          id:'pixtral-12b',                   note:'Vision · 12B'},
+      ]},
+      { label:'REASONING', models:[
+        {name:'Mistral Saba',         id:'mistral-saba-latest',           note:'Arabic + multilingual'},
+      ]},
+    ]
+  },
+  {
+    id:'cohere', name:'Cohere', subtitle:'Cloud · Requires API Key',
+    color:'#a78bfa', requiresKey:true, keyName:'jarvis_cohere_key', keyPrefix:'',
+    keyHint:'dashboard.cohere.com → API Keys',
+    groups:[
+      { label:'COMMAND R', models:[
+        {name:'Command R+',           id:'command-r-plus',                note:'Best · RAG optimized'},
+        {name:'Command R+ 08-2024',   id:'command-r-plus-08-2024',        note:'Aug 2024'},
+        {name:'Command R',            id:'command-r',                     note:'Efficient RAG'},
+        {name:'Command R 08-2024',    id:'command-r-08-2024',             note:'Aug 2024'},
+        {name:'Command R 03-2024',    id:'command-r-03-2024',             note:'Mar 2024'},
+      ]},
+      { label:'COMMAND', models:[
+        {name:'Command',              id:'command',                       note:'Classic'},
+        {name:'Command Nightly',      id:'command-nightly',               note:'Latest nightly'},
+        {name:'Command Light',        id:'command-light',                 note:'Fast · Cheap'},
+        {name:'Command Light Nightly',id:'command-light-nightly',         note:'Light nightly'},
       ]},
     ]
   },
