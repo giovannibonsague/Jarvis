@@ -714,66 +714,110 @@ async function mbFetch(url){
   return r.json();
 }
 
-// Search MusicBrainz — returns results sorted by score, higher limit for better accuracy
+// Search MusicBrainz with proper Lucene field syntax for accuracy
+// Uses recording:"title" field to match title exactly, not freetext
 async function mbSearchRecording(query){
-  // Wrap title in quotes for exact-phrase matching to avoid "Should I Stay" matching Living Colour
-  const q=encodeURIComponent('"'+query.trim()+'"');
-  let d=await mbFetch(`https://musicbrainz.org/ws/2/recording/?query=${q}&limit=10&fmt=json`);
-  let recs=(d.recordings||[]);
-  // If quoted search returns nothing useful, fall back to plain search
-  if(!recs.length||recs[0].score<50){
-    const q2=encodeURIComponent(query.trim());
-    d=await mbFetch(`https://musicbrainz.org/ws/2/recording/?query=${q2}&limit=10&fmt=json`);
-    recs=(d.recordings||[]);
+  const clean = query.trim();
+
+  // Strategy 1: Use MB Lucene field syntax — recording:"title"
+  // This is far more accurate than plain text or quoted freetext
+  const fieldQ = encodeURIComponent(`recording:"${clean}"`);
+  let d = await mbFetch(`https://musicbrainz.org/ws/2/recording/?query=${fieldQ}&limit=10&fmt=json`);
+  let recs = (d.recordings||[]).sort((a,b)=>(b.score||0)-(a.score||0));
+
+  // Strategy 2: If top result score < 60, try plain unquoted search as well and merge
+  if(!recs.length || recs[0].score < 60){
+    try{
+      const plainQ = encodeURIComponent(clean);
+      const d2 = await mbFetch(`https://musicbrainz.org/ws/2/recording/?query=${plainQ}&limit=10&fmt=json`);
+      const recs2 = (d2.recordings||[]);
+      // Merge, deduplicate by id, re-sort
+      const seen = new Set(recs.map(r=>r.id));
+      recs2.forEach(r=>{ if(!seen.has(r.id)){ recs.push(r); seen.add(r.id); } });
+      recs.sort((a,b)=>(b.score||0)-(a.score||0));
+    }catch(e){}
   }
-  recs.sort((a,b)=>(b.score||0)-(a.score||0));
+
   return recs.map(r=>({
-    title:r.title,
-    artist:r['artist-credit']?.[0]?.artist?.name||'',
-    artistId:r['artist-credit']?.[0]?.artist?.id||'',
-    releaseId:r.releases?.[0]?.id||'',
-    releaseTitle:r.releases?.[0]?.title||'',
-    score:r.score||0,
+    title: r.title,
+    artist: r['artist-credit']?.[0]?.artist?.name || '',
+    artistId: r['artist-credit']?.[0]?.artist?.id || '',
+    releaseId: r.releases?.[0]?.id || '',
+    releaseTitle: r.releases?.[0]?.title || '',
+    score: r.score || 0,
   }));
 }
 
-// Search YouTube for a real video ID via free proxy APIs — NO listType:search (unreliable)
+// ── YouTube video ID search ──
+// Tries multiple strategies in order: Piped → Invidious → YouTube oEmbed noembed trick
 async function searchYouTubeId(query){
-  const PIPED=[
+  const enc = encodeURIComponent(query);
+
+  // 1. Piped instances (most reliable when up)
+  const PIPED = [
     'https://pipedapi.kavin.rocks',
-    'https://piped-api.garudalinux.org',
-    'https://api.piped.projectsegfau.lt',
     'https://pipedapi.adminforge.de',
+    'https://piped-api.garudalinux.org',
+    'https://pipedapi.tokhmi.xyz',
+    'https://pipedapi.moomoo.me',
   ];
   for(const base of PIPED){
     try{
-      const r=await fetch(`${base}/search?q=${encodeURIComponent(query)}&filter=videos`,
-        {signal:AbortSignal.timeout(5000)});
-      if(!r.ok)continue;
-      const d=await r.json();
-      const item=d.items?.find(i=>i.url?.includes('/watch'));
+      const r = await fetch(`${base}/search?q=${enc}&filter=videos`,
+        {signal:AbortSignal.timeout(4000)});
+      if(!r.ok) continue;
+      const d = await r.json();
+      const item = d.items?.find(i=>i.url?.includes('/watch'));
       if(item){
-        const vid=item.url.match(/[?&]v=([a-zA-Z0-9_-]{11})/)?.[1]
-               ||item.url.match(/\/([a-zA-Z0-9_-]{11})$/)?.[1];
-        if(vid)return{videoId:vid,title:item.title||query};
+        const vid = item.url.match(/[?&]v=([a-zA-Z0-9_-]{11})/)?.[1]
+                 || item.url.match(/\/([a-zA-Z0-9_-]{11})$/)?.[1];
+        if(vid){ console.log('[YT] found via Piped:', base, vid); return {videoId:vid, title:item.title||query}; }
       }
-    }catch(e){}
+    }catch(e){ console.warn('[YT] Piped failed:', base, e.message); }
   }
-  // Invidious fallback
-  const INV=[
-    'https://inv.riverside.rocks',
-    'https://invidious.namazso.eu',
-    'https://invidious.snopyta.org',
+
+  // 2. Invidious instances
+  const INV = [
+    'https://invidious.nerdvpn.de',
+    'https://inv.tux.pizza',
+    'https://invidious.privacyredirect.com',
+    'https://yt.artemislena.eu',
+    'https://invidious.flokinet.to',
   ];
   for(const base of INV){
     try{
-      const r=await fetch(`${base}/api/v1/search?q=${encodeURIComponent(query)}&type=video&fields=videoId,title`,
-        {signal:AbortSignal.timeout(5000)});
-      if(!r.ok)continue;
-      const d=await r.json();
-      if(d[0]?.videoId)return{videoId:d[0].videoId,title:d[0].title||query};
-    }catch(e){}
+      const r = await fetch(`${base}/api/v1/search?q=${enc}&type=video`,
+        {signal:AbortSignal.timeout(4000)});
+      if(!r.ok) continue;
+      const d = await r.json();
+      if(d[0]?.videoId){ console.log('[YT] found via Invidious:', base, d[0].videoId); return {videoId:d[0].videoId, title:d[0].title||query}; }
+    }catch(e){ console.warn('[YT] Invidious failed:', base, e.message); }
   }
+
+  // 3. DuckDuckGo instant search — scrape YouTube video IDs from DDG results via allorigins
+  try{
+    const ddgUrl = `https://api.duckduckgo.com/?q=${enc}+site:youtube.com&format=json&no_html=1`;
+    const proxy = `https://api.allorigins.win/get?url=${encodeURIComponent(ddgUrl)}`;
+    const r = await fetch(proxy, {signal:AbortSignal.timeout(5000)});
+    const outer = await r.json();
+    const text = outer.contents || '';
+    const match = text.match(/youtube\.com\/watch\?v=([a-zA-Z0-9_-]{11})/);
+    if(match){ console.log('[YT] found via DDG+allorigins:', match[1]); return {videoId:match[1], title:query}; }
+  }catch(e){ console.warn('[YT] DDG fallback failed:', e.message); }
+
+  // 4. YouTube search results page scrape via allorigins proxy
+  try{
+    const ytSearchUrl = `https://www.youtube.com/results?search_query=${enc}`;
+    const proxy = `https://api.allorigins.win/get?url=${encodeURIComponent(ytSearchUrl)}`;
+    const r = await fetch(proxy, {signal:AbortSignal.timeout(6000)});
+    const outer = await r.json();
+    const html = outer.contents || '';
+    // Extract videoId from ytInitialData or href patterns in page
+    const match = html.match(/"videoId":"([a-zA-Z0-9_-]{11})"/);
+    if(match){ console.log('[YT] found via YT page scrape:', match[1]); return {videoId:match[1], title:query}; }
+  }catch(e){ console.warn('[YT] page scrape failed:', e.message); }
+
+  console.warn('[YT] all strategies failed for query:', query);
   return null;
 }
 
