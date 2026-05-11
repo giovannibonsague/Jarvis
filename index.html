@@ -237,6 +237,37 @@ html,body{width:100%;height:100%;overflow:hidden;background:#000;cursor:none;
   color:var(--c);text-shadow:0 0 30px var(--c)}
 #drag-overlay-sub{font-size:9px;letter-spacing:0.25em;color:rgba(0,216,255,0.45)}
 
+/* ── TEXT INPUT MODE ── */
+#input-bar{
+  position:fixed;bottom:88px;left:50%;transform:translateX(-50%);
+  z-index:30;display:none;flex-direction:column;align-items:center;gap:5px;
+  pointer-events:auto;
+}
+#input-bar.on{display:flex}
+#input-wrap{
+  display:flex;align-items:center;
+  border:1px solid rgba(0,216,255,0.35);
+  background:rgba(0,3,12,0.92);
+  min-width:480px;max-width:68vw;
+}
+#input-field{
+  flex:1;background:transparent;border:none;outline:none;
+  font-family:var(--fo);font-size:11px;letter-spacing:0.18em;
+  color:var(--c);padding:9px 14px;caret-color:var(--c);
+  text-transform:uppercase;
+}
+#input-field::placeholder{color:rgba(0,216,255,0.2);font-size:9px;letter-spacing:0.25em;}
+#input-send{
+  background:transparent;border:none;border-left:1px solid rgba(0,216,255,0.2);
+  color:var(--c);cursor:pointer;padding:9px 14px;font-size:13px;
+  transition:background 0.15s;font-family:monospace;
+}
+#input-send:hover{background:rgba(0,216,255,0.08)}
+#input-mode-lbl{
+  font-size:7px;letter-spacing:0.22em;color:rgba(0,216,255,0.25);text-align:center;
+}
+#input-mode-lbl span{color:rgba(0,216,255,0.5)}
+
 </style>
 </head>
 <body>
@@ -459,7 +490,16 @@ html,body{width:100%;height:100%;overflow:hidden;background:#000;cursor:none;
   </div>
 </div>
 <input id="file-input" type="file" accept=".stl,.obj,.ply,.fbx,.3ds" style="display:none">
-<div id="wake-ind" style="position:fixed;bottom:88px;left:50%;transform:translateX(-50%);font-size:8px;letter-spacing:0.22em;color:rgba(0,216,255,0.22);pointer-events:none;transition:all 0.3s">CLICK CORE OR SAY "JARVIS" TO ACTIVATE</div>
+<div id="wake-ind" style="position:fixed;bottom:88px;left:50%;transform:translateX(-50%);font-size:8px;letter-spacing:0.22em;color:rgba(0,216,255,0.22);pointer-events:none;transition:all 0.3s">CLICK CORE OR SAY "JARVIS" TO ACTIVATE · SPACE = TYPE</div>
+
+<!-- TEXT INPUT BAR — shown when text mode active, sits between wake-ind and model row -->
+<div id="input-bar">
+  <div id="input-wrap">
+    <input id="input-field" type="text" placeholder="TYPE A COMMAND OR QUESTION..." autocomplete="off" spellcheck="false">
+    <button id="input-send" title="Send">▶</button>
+  </div>
+  <div id="input-mode-lbl">TEXT MODE · <span>SPACE</span> TO SWITCH TO VOICE · <span>ESC</span> TO CLEAR</div>
+</div>
 
 <!-- ══════════════════════════════════════════
      MUSIC PLAYER — MusicBrainz + YouTube
@@ -1452,7 +1492,19 @@ function handleCmd(raw){
   if(m.match(/(?:daily\s+briefing|morning\s+briefing|brief\s+me|run\s+briefing|give\s+me\s+(?:a\s+)?briefing)/i)){localStorage.removeItem('jarvis_last_briefing');runDailyBriefing();return;}
 
   // ── KEYBOARD SHORTCUTS ──
-  if(m.match(/(?:keyboard|hotkey|shortcut)s?/i)){showInfoPanel('⌨ KEYBOARD SHORTCUTS',['SPACE / J — Activate Jarvis','M — Mute / unmute mic','N — Show notes','S — Live stats graph','C — Clock widget','W — Weather widget','P — Generate password','ESC — Close all / sleep','? — Command list','1=Weather 2=Time 3=Status 4=News 5=Joke'],'rgba(153,85,255,0.7)');speak('Here are the keyboard shortcuts.');return;}
+  if(m.match(/(?:keyboard|hotkey|shortcut)s?/i)){showInfoPanel('⌨ KEYBOARD SHORTCUTS',[
+    'SPACE — Toggle voice / text mode',
+    'J — Activate Jarvis (voice)',
+    'M — Mute / unmute mic',
+    'N — Show notes',
+    'S — Live stats graph',
+    'C — Clock widget',
+    'W — Weather widget',
+    'P — Generate password',
+    'ESC — Close all / exit text mode',
+    '? — Command list',
+    '1=Weather  2=Time  3=Status  4=News  5=Joke',
+  ],'rgba(153,85,255,0.7)');speak('Here are the keyboard shortcuts.');return;}
 
   // 3D FILE
   if(m.match(/(?:open|upload|load|show|bring\s+up)(?:\s+a|\s+the|\s+my)?\s*(?:3d|stl|obj|ply|fbx|three.?d|model|mesh|file)/i)){openFilePrompt();return;}
@@ -2066,34 +2118,136 @@ function toggleStickyWidget(type) {
 window.toggleStickyWidget = toggleStickyWidget;
 
 // ══════════════════════════════════════════
-//  KEYBOARD SHORTCUTS
+//  TEXT INPUT MODE
+//  Space = toggle voice ↔ text
+//  Default = voice mode
 // ══════════════════════════════════════════
+let textMode = false;
+
+function setTextMode(on) {
+  textMode = on;
+  const bar = $('input-bar');
+  const wakeInd = $('wake-ind');
+
+  if (on) {
+    // Switch to TEXT mode
+    bar.classList.add('on');
+    if (wakeInd) { wakeInd.style.opacity = '0'; wakeInd.style.pointerEvents = 'none'; }
+    // Mute mic so it doesn't pick up typing sounds
+    if (recog && listening) { try { recog.abort(); } catch(e) {} }
+    $('mic-dot').classList.remove('on');
+    $('mic-lbl').textContent = 'TEXT MODE';
+    $('mpulse').classList.remove('on');
+    // Focus the input field
+    setTimeout(() => $('input-field')?.focus(), 60);
+    notif('TEXT MODE — TYPE YOUR COMMAND');
+    SFX.popupOpen();
+  } else {
+    // Switch back to VOICE mode
+    bar.classList.remove('on');
+    if ($('input-field')) $('input-field').value = '';
+    if (wakeInd) { wakeInd.style.opacity = ''; wakeInd.style.pointerEvents = ''; }
+    // Restart mic
+    if (micReady && recog && !listening && !speaking) {
+      try { recog.start(); } catch(e) {}
+    }
+    $('mic-lbl').textContent = wakeActive ? 'LISTENING' : 'WAKE WORD';
+    notif('VOICE MODE');
+    SFX.popupClose();
+    $('input-field')?.blur();
+  }
+}
+
+// Send text input
+function sendTextInput() {
+  const field = $('input-field');
+  if (!field) return;
+  const val = field.value.trim();
+  if (!val) return;
+  field.value = '';
+  notif(val.toUpperCase().slice(0, 50));
+  SFX.cmdRecognized();
+  // Activate wake so commands work even if not in wake mode
+  if (!wakeActive) activateWake();
+  handleCmd(val);
+}
+
+// Wire up send button and Enter key on the input field
+document.addEventListener('DOMContentLoaded', () => {}, false); // noop — already in DOMContentLoaded
+const _inputSendBtn = document.getElementById('input-send');
+if (_inputSendBtn) _inputSendBtn.addEventListener('click', sendTextInput);
+
+const _inputField = document.getElementById('input-field');
+if (_inputField) {
+  _inputField.addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); sendTextInput(); }
+    // Escape clears the field
+    if (e.key === 'Escape') { _inputField.value = ''; setTextMode(false); }
+    // Stop propagation so other keyboard shortcuts don't fire while typing
+    e.stopPropagation();
+  });
+  // Prevent Space from toggling mode while typing in the field
+  _inputField.addEventListener('keyup', e => e.stopPropagation());
+}
+
+// ── KEYBOARD SHORTCUTS ── (updated — Space now toggles text/voice)
 document.addEventListener('keydown', e => {
-  // Don't fire if typing in an input
+  // Never fire global shortcuts when typing in any input
   if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
-  const k = e.key.toLowerCase();
-  // Space = activate/deactivate wake
-  if (k === ' ' && !e.ctrlKey && !e.altKey) { e.preventDefault(); wakeActive ? deactivateWake() : (activateWake(), speak(`Yes, ${userName}?`)); return; }
-  // J = activate wake (like saying "Jarvis")
-  if (k === 'j' && !e.ctrlKey) { activateWake(); speak(`Yes, ${userName}?`); return; }
+
+  const k = e.key;
+
+  // SPACE = toggle text / voice mode
+  if (k === ' ' && !e.ctrlKey && !e.altKey) {
+    e.preventDefault();
+    setTextMode(!textMode);
+    return;
+  }
+
+  // J = activate wake word (voice)
+  if (k === 'j' && !e.ctrlKey) {
+    if (textMode) setTextMode(false);
+    activateWake(); speak(`Yes, ${userName}?`); return;
+  }
+
   // M = mute/unmute mic
-  if (k === 'm' && !e.ctrlKey) { if (micReady && recog) { try { recog.abort(); } catch(e){} micReady = false; $('mic-dot').classList.remove('on'); $('mic-lbl').textContent = 'MUTED'; SFX.micOff(); notif('MIC MUTED'); } else { startMic(); } return; }
+  if (k === 'm' && !e.ctrlKey) {
+    if (micReady && recog) {
+      try { recog.abort(); } catch(e) {}
+      micReady = false;
+      $('mic-dot').classList.remove('on');
+      $('mic-lbl').textContent = 'MUTED';
+      SFX.micOff(); notif('MIC MUTED');
+    } else { startMic(); }
+    return;
+  }
+
   // N = show notes
   if (k === 'n' && !e.ctrlKey) { showNotes(); return; }
   // S = stats graph
   if (k === 's' && !e.ctrlKey) { showStatsGraph(); return; }
-  // C = toggle clock widget
+  // C = clock widget
   if (k === 'c' && !e.ctrlKey) { toggleStickyWidget('clock'); return; }
-  // W = toggle weather widget
+  // W = weather widget
   if (k === 'w' && !e.ctrlKey) { toggleStickyWidget('weather'); return; }
-  // Escape = close all overlays / sleep
-  if (k === 'escape') { deactivateWake(); document.querySelectorAll('[id$="-overlay"]').forEach(el => el.remove()); SFX.popupClose(); return; }
-  // ? = show command list
-  if (k === '?') { showCommandList(); return; }
-  // P = generate password
+  // P = password
   if (k === 'p' && !e.ctrlKey) { generatePassword(); return; }
-  // Number keys 1-9 = quick commands
-  const quickCmds = { '1': 'weather', '2': "what's the time", '3': 'system status', '4': 'latest news', '5': 'tell me a joke' };
+  // ? = command list
+  if (k === '?') { showCommandList(); return; }
+
+  // Escape = close overlays / sleep / exit text mode
+  if (k === 'Escape') {
+    if (textMode) { setTextMode(false); return; }
+    deactivateWake();
+    document.querySelectorAll('[id$="-overlay"]').forEach(el => el.remove());
+    SFX.popupClose(); return;
+  }
+
+  // Number keys = quick commands (only in voice mode)
+  const quickCmds = {
+    '1': 'weather', '2': "what's the time",
+    '3': 'system status', '4': 'latest news', '5': 'tell me a joke'
+  };
   if (quickCmds[k] && !e.ctrlKey) { handleCmd(quickCmds[k]); return; }
 });
 
