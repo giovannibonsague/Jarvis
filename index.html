@@ -714,110 +714,90 @@ async function mbFetch(url){
   return r.json();
 }
 
-// Search MusicBrainz with proper Lucene field syntax for accuracy
-// Uses recording:"title" field to match title exactly, not freetext
-async function mbSearchRecording(query){
-  const clean = query.trim();
+// ── Unified AI music lookup — one call gets artist, title, album AND videoId ──
+// Uses whatever AI provider is currently active (WebLLM, OpenAI, Anthropic, Grok, etc.)
+async function aiMusicLookup(query){
+  const prompt = `The user wants to play: "${query}"
+Return ONLY raw JSON (no markdown, no explanation, no extra text):
+{"videoId":"xxxxxxxxxxx","title":"exact song title","artist":"exact original artist name","album":"album name or empty"}
+Rules:
+- videoId: real 11-char YouTube ID you are confident exists
+- artist: the ORIGINAL artist, not a cover or tribute band
+- Only return a videoId you are sure about`;
 
-  // Strategy 1: Use MB Lucene field syntax — recording:"title"
-  // This is far more accurate than plain text or quoted freetext
-  const fieldQ = encodeURIComponent(`recording:"${clean}"`);
-  let d = await mbFetch(`https://musicbrainz.org/ws/2/recording/?query=${fieldQ}&limit=10&fmt=json`);
-  let recs = (d.recordings||[]).sort((a,b)=>(b.score||0)-(a.score||0));
+  let resp = '';
+  try{
+    if(currentProvider==='webllm'&&webllmReady&&webllmEngine){
+      const r=await webllmEngine.chat.completions.create({messages:[{role:'user',content:prompt}],temperature:0.1,max_tokens:120,stream:false});
+      resp=r.choices[0].message.content?.trim()||'';
 
-  // Strategy 2: If top result score < 60, try plain unquoted search as well and merge
-  if(!recs.length || recs[0].score < 60){
+    }else if(currentProvider==='openai'&&hasKey('openai')){
+      const r=await fetch('https://api.openai.com/v1/chat/completions',{method:'POST',signal:AbortSignal.timeout(10000),headers:{'Content-Type':'application/json','Authorization':'Bearer '+getProviderKey('openai')},body:JSON.stringify({model:currentModel,messages:[{role:'user',content:prompt}],max_tokens:120,temperature:0.1})});
+      if(r.ok)resp=(await r.json()).choices?.[0]?.message?.content?.trim()||'';
+
+    }else if(currentProvider==='anthropic'&&hasKey('anthropic')){
+      const r=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',signal:AbortSignal.timeout(10000),headers:{'Content-Type':'application/json','x-api-key':getProviderKey('anthropic'),'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},body:JSON.stringify({model:currentModel,max_tokens:120,messages:[{role:'user',content:prompt}]})});
+      if(r.ok)resp=(await r.json()).content?.[0]?.text?.trim()||'';
+
+    }else if(currentProvider==='deepseek'&&hasKey('deepseek')){
+      const r=await fetch('https://api.deepseek.com/chat/completions',{method:'POST',signal:AbortSignal.timeout(10000),headers:{'Content-Type':'application/json','Authorization':'Bearer '+getProviderKey('deepseek')},body:JSON.stringify({model:currentModel,messages:[{role:'user',content:prompt}],max_tokens:120,temperature:0.1})});
+      if(r.ok)resp=(await r.json()).choices?.[0]?.message?.content?.trim()||'';
+
+    }else if(currentProvider==='grok'&&hasKey('grok')){
+      const r=await fetch('https://api.x.ai/v1/chat/completions',{method:'POST',signal:AbortSignal.timeout(10000),headers:{'Content-Type':'application/json','Authorization':'Bearer '+getProviderKey('grok')},body:JSON.stringify({model:currentModel,messages:[{role:'user',content:prompt}],max_tokens:120,temperature:0.1})});
+      if(r.ok)resp=(await r.json()).choices?.[0]?.message?.content?.trim()||'';
+
+    }else if(currentProvider==='google'&&hasKey('google')){
+      const r=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${currentModel}:generateContent?key=${getProviderKey('google')}`,{method:'POST',signal:AbortSignal.timeout(10000),headers:{'Content-Type':'application/json'},body:JSON.stringify({contents:[{parts:[{text:prompt}]}],generationConfig:{maxOutputTokens:120,temperature:0.1}})});
+      if(r.ok)resp=(await r.json()).candidates?.[0]?.content?.parts?.[0]?.text?.trim()||'';
+
+    }else if(currentProvider==='mistral'&&hasKey('mistral')){
+      const r=await fetch('https://api.mistral.ai/v1/chat/completions',{method:'POST',signal:AbortSignal.timeout(10000),headers:{'Content-Type':'application/json','Authorization':'Bearer '+getProviderKey('mistral')},body:JSON.stringify({model:currentModel,messages:[{role:'user',content:prompt}],max_tokens:120,temperature:0.1})});
+      if(r.ok)resp=(await r.json()).choices?.[0]?.message?.content?.trim()||'';
+    }
+  }catch(e){console.warn('[Music] AI error:',e.message);}
+
+  if(resp){
     try{
-      const plainQ = encodeURIComponent(clean);
-      const d2 = await mbFetch(`https://musicbrainz.org/ws/2/recording/?query=${plainQ}&limit=10&fmt=json`);
-      const recs2 = (d2.recordings||[]);
-      // Merge, deduplicate by id, re-sort
-      const seen = new Set(recs.map(r=>r.id));
-      recs2.forEach(r=>{ if(!seen.has(r.id)){ recs.push(r); seen.add(r.id); } });
-      recs.sort((a,b)=>(b.score||0)-(a.score||0));
-    }catch(e){}
+      const clean=resp.replace(/```json|```/g,'').trim();
+      const m=clean.match(/\{[\s\S]*?\}/);
+      if(m){
+        const p=JSON.parse(m[0]);
+        if(p.videoId&&/^[a-zA-Z0-9_-]{11}$/.test(p.videoId)){
+          console.log('[Music] AI result:',p);
+          return p;
+        }
+      }
+    }catch(e){console.warn('[Music] JSON parse fail:',e.message,resp);}
   }
-
-  return recs.map(r=>({
-    title: r.title,
-    artist: r['artist-credit']?.[0]?.artist?.name || '',
-    artistId: r['artist-credit']?.[0]?.artist?.id || '',
-    releaseId: r.releases?.[0]?.id || '',
-    releaseTitle: r.releases?.[0]?.title || '',
-    score: r.score || 0,
-  }));
+  return null;
 }
 
-// ── YouTube video ID search ──
-// Tries multiple strategies in order: Piped → Invidious → YouTube oEmbed noembed trick
+// Piped/Invidious fallback for video search
 async function searchYouTubeId(query){
-  const enc = encodeURIComponent(query);
-
-  // 1. Piped instances (most reliable when up)
-  const PIPED = [
-    'https://pipedapi.kavin.rocks',
-    'https://pipedapi.adminforge.de',
-    'https://piped-api.garudalinux.org',
-    'https://pipedapi.tokhmi.xyz',
-    'https://pipedapi.moomoo.me',
+  const ENDPOINTS=[
+    {url:'https://pipedapi.kavin.rocks/search?q=QUERY&filter=videos',type:'piped'},
+    {url:'https://pipedapi.adminforge.de/search?q=QUERY&filter=videos',type:'piped'},
+    {url:'https://piped.video/api/search?q=QUERY&filter=videos',type:'piped'},
+    {url:'https://invidious.nerdvpn.de/api/v1/search?q=QUERY&type=video',type:'inv'},
+    {url:'https://inv.tux.pizza/api/v1/search?q=QUERY&type=video',type:'inv'},
+    {url:'https://yt.artemislena.eu/api/v1/search?q=QUERY&type=video',type:'inv'},
   ];
-  for(const base of PIPED){
+  const enc=encodeURIComponent(query);
+  for(const ep of ENDPOINTS){
     try{
-      const r = await fetch(`${base}/search?q=${enc}&filter=videos`,
-        {signal:AbortSignal.timeout(4000)});
-      if(!r.ok) continue;
-      const d = await r.json();
-      const item = d.items?.find(i=>i.url?.includes('/watch'));
-      if(item){
-        const vid = item.url.match(/[?&]v=([a-zA-Z0-9_-]{11})/)?.[1]
-                 || item.url.match(/\/([a-zA-Z0-9_-]{11})$/)?.[1];
-        if(vid){ console.log('[YT] found via Piped:', base, vid); return {videoId:vid, title:item.title||query}; }
+      const r=await fetch(ep.url.replace('QUERY',enc),{signal:AbortSignal.timeout(4000)});
+      if(!r.ok)continue;
+      const d=await r.json();
+      if(ep.type==='piped'){
+        const item=d.items?.find(i=>i.url?.includes('/watch'));
+        const vid=item?.url?.match(/[?&]v=([a-zA-Z0-9_-]{11})/)?.[1];
+        if(vid)return{videoId:vid,title:item.title||query,artist:''};
+      }else{
+        if(d[0]?.videoId)return{videoId:d[0].videoId,title:d[0].title||query,artist:''};
       }
-    }catch(e){ console.warn('[YT] Piped failed:', base, e.message); }
+    }catch(e){}
   }
-
-  // 2. Invidious instances
-  const INV = [
-    'https://invidious.nerdvpn.de',
-    'https://inv.tux.pizza',
-    'https://invidious.privacyredirect.com',
-    'https://yt.artemislena.eu',
-    'https://invidious.flokinet.to',
-  ];
-  for(const base of INV){
-    try{
-      const r = await fetch(`${base}/api/v1/search?q=${enc}&type=video`,
-        {signal:AbortSignal.timeout(4000)});
-      if(!r.ok) continue;
-      const d = await r.json();
-      if(d[0]?.videoId){ console.log('[YT] found via Invidious:', base, d[0].videoId); return {videoId:d[0].videoId, title:d[0].title||query}; }
-    }catch(e){ console.warn('[YT] Invidious failed:', base, e.message); }
-  }
-
-  // 3. DuckDuckGo instant search — scrape YouTube video IDs from DDG results via allorigins
-  try{
-    const ddgUrl = `https://api.duckduckgo.com/?q=${enc}+site:youtube.com&format=json&no_html=1`;
-    const proxy = `https://api.allorigins.win/get?url=${encodeURIComponent(ddgUrl)}`;
-    const r = await fetch(proxy, {signal:AbortSignal.timeout(5000)});
-    const outer = await r.json();
-    const text = outer.contents || '';
-    const match = text.match(/youtube\.com\/watch\?v=([a-zA-Z0-9_-]{11})/);
-    if(match){ console.log('[YT] found via DDG+allorigins:', match[1]); return {videoId:match[1], title:query}; }
-  }catch(e){ console.warn('[YT] DDG fallback failed:', e.message); }
-
-  // 4. YouTube search results page scrape via allorigins proxy
-  try{
-    const ytSearchUrl = `https://www.youtube.com/results?search_query=${enc}`;
-    const proxy = `https://api.allorigins.win/get?url=${encodeURIComponent(ytSearchUrl)}`;
-    const r = await fetch(proxy, {signal:AbortSignal.timeout(6000)});
-    const outer = await r.json();
-    const html = outer.contents || '';
-    // Extract videoId from ytInitialData or href patterns in page
-    const match = html.match(/"videoId":"([a-zA-Z0-9_-]{11})"/);
-    if(match){ console.log('[YT] found via YT page scrape:', match[1]); return {videoId:match[1], title:query}; }
-  }catch(e){ console.warn('[YT] page scrape failed:', e.message); }
-
-  console.warn('[YT] all strategies failed for query:', query);
   return null;
 }
 
@@ -850,7 +830,6 @@ function updateMusicUI(title,artist,album,artUrl){
   }
 }
 
-// Load YouTube IFrame API once
 function loadYTApi(){
   if(window.YT||document.getElementById('yt-api-script'))return;
   const s=document.createElement('script');s.id='yt-api-script';
@@ -858,11 +837,9 @@ function loadYTApi(){
 }
 window.onYouTubeIframeAPIReady=function(){ytReady=true;};
 
-// Play by direct YouTube video ID — reliable, no listType:search
 function playYouTubeById(videoId,displayTitle,artist,album){
   const old=document.getElementById('yt-wrap');if(old)old.remove();
   if(ytIframe){try{ytIframe.destroy();}catch(e){}ytIframe=null;}
-  // Must be >0px for Chrome autoplay
   const wrap=document.createElement('div');wrap.id='yt-wrap';
   wrap.style.cssText='position:fixed;bottom:54px;right:0;width:2px;height:2px;overflow:hidden;z-index:1;opacity:0.01;';
   const div=document.createElement('div');div.id='yt-player-div';
@@ -872,60 +849,48 @@ function playYouTubeById(videoId,displayTitle,artist,album){
   waitYT(()=>{
     try{
       ytIframe=new YT.Player('yt-player-div',{
-        width:2,height:2,
-        videoId:videoId,
+        width:2,height:2,videoId,
         playerVars:{autoplay:1,controls:0,playsinline:1,rel:0,iv_load_policy:3,modestbranding:1},
         events:{
           onReady(e){
             e.target.setVolume(Math.round((($('vol-sl')?.value)||0.8)*100));
             e.target.playVideo();
             notif('NOW PLAYING: '+displayTitle.slice(0,40).toUpperCase());
-            speak(`Playing ${displayTitle} by ${artist||'the artist'}.`);
+            speak(`Playing ${displayTitle}${artist?' by '+artist:''}.`);
             setCoreState('idle');
             if($('m-play'))$('m-play').textContent='⏸';
             startProgressTracking();
           },
           onStateChange(e){
-            if(e.data===1){if($('m-play'))$('m-play').textContent='⏸';}
-            if(e.data===2){if($('m-play'))$('m-play').textContent='▶';}
-            if(e.data===0){if($('m-play'))$('m-play').textContent='▶';clearInterval(musicProgressTimer);}
+            if(e.data===1)$('m-play').textContent='⏸';
+            if(e.data===2)$('m-play').textContent='▶';
+            if(e.data===0){$('m-play').textContent='▶';clearInterval(musicProgressTimer);}
             if(e.data===5){notif('VIDEO UNPLAYABLE — RETRYING','warn');tryNextVideo(displayTitle,artist);}
           },
           onError(e){
-            console.warn('YT error code:',e.data);
-            notif('VIDEO ERROR '+e.data+' — TRYING NEXT','warn');
+            console.warn('YT error:',e.data);
+            notif('VIDEO ERROR — RETRYING','warn');
             tryNextVideo(displayTitle,artist);
           }
         }
       });
-    }catch(err){
-      notif('Player init error','warn');speak('Music player failed to initialize.');setCoreState('idle');
-    }
+    }catch(err){notif('Player error','warn');speak('Player failed.');setCoreState('idle');}
   });
 }
 
-// Retry with alternate query if first video fails
 let retryCount=0;
 async function tryNextVideo(title,artist){
-  if(retryCount>=3){
-    retryCount=0;
-    speak(`Couldn't find a working video for ${title}. Try a different search.`);
-    setCoreState('idle');return;
-  }
+  if(retryCount>=2){retryCount=0;speak(`Couldn't find a working video for ${title}.`);setCoreState('idle');return;}
   retryCount++;
-  const altQueries=[
-    `${artist} ${title} official audio`,
-    `${artist} ${title} lyrics`,
-    `${title} ${artist}`,
-  ];
-  const q=altQueries[retryCount-1]||`${title} ${artist}`;
-  notif('RETRYING: '+q.toUpperCase().slice(0,40));
-  const result=await searchYouTubeId(q);
-  if(result)playYouTubeById(result.videoId,title,artist,'');
-  else await tryNextVideo(title,artist);
+  // Re-ask AI with more specific query
+  const retryQuery=`${artist} ${title} official audio`;
+  notif('RETRYING WITH AI: '+retryQuery.toUpperCase().slice(0,40));
+  const result=await aiMusicLookup(retryQuery)||await searchYouTubeId(retryQuery);
+  if(result?.videoId)playYouTubeById(result.videoId,title,artist,'');
+  else{retryCount=0;speak(`No video available for ${title}.`);setCoreState('idle');}
 }
 
-// Main play function: MusicBrainz (accurate metadata) → YouTube ID search → direct ID play
+// Main play function — AI handles everything in ONE call
 async function playMusic(query){
   SFX.music();setCoreState('processing');
   notif('SEARCHING: '+query.toUpperCase());
@@ -933,78 +898,67 @@ async function playMusic(query){
   updateMusicUI('SEARCHING...','','',null);
   retryCount=0;
 
-  let displayTitle=query,artist='',album='',releaseId='';
-  let ytQuery=query;
-
-  // Step 1: MusicBrainz for accurate artist + title
-  try{
-    const results=await mbSearchRecording(query);
-    if(results.length>0&&results[0].score>=55){
-      const top=results[0];
-      displayTitle=top.title;
-      artist=top.artist;
-      album=top.releaseTitle;
-      releaseId=top.releaseId;
-      currentSong=top.title;
-      currentArtist=top.artist;
-      // "Artist - Title" is the most accurate YouTube query format
-      ytQuery=`${top.artist} - ${top.title}`;
-      updateMusicUI(top.title,top.artist,top.releaseTitle,null);
-      notif(`MB: ${top.artist} — ${top.title} (${top.score}%)`);
-      // Album art in background
-      fetchAlbumArt(releaseId).then(url=>{
-        if(url)updateMusicUI(top.title,top.artist,top.releaseTitle,url);
-      });
-    }else{
-      notif('MB SCORE LOW — DIRECT SEARCH','warn');
-      currentSong=query;currentArtist='';
-    }
-  }catch(e){
-    console.warn('MusicBrainz:',e.message);
-    notif('MB FAILED — DIRECT SEARCH','warn');
-    currentSong=query;currentArtist='';
+  const hasAI=(currentProvider==='webllm'&&webllmReady)||
+              (currentProvider!=='webllm'&&hasKey(currentProvider));
+  if(!hasAI){
+    speak(`I need an AI model active to play music. Load WebLLM or add an API key.`);
+    notif('NO AI AVAILABLE','warn');
+    setCoreState('idle');if($('music-player'))$('music-player').classList.remove('on');
+    return;
   }
 
-  // Step 2: Get actual YouTube video ID (no listType:search)
-  notif('FINDING VIDEO...');
-  const ytResult=await searchYouTubeId(ytQuery);
-  if(ytResult){
-    playYouTubeById(ytResult.videoId,displayTitle,artist,album);
-  }else if(ytQuery!==query){
-    // Try original query as fallback
-    const fallback=await searchYouTubeId(query);
-    if(fallback)playYouTubeById(fallback.videoId,displayTitle,artist,album);
-    else{speak(`No video found for ${displayTitle}.`);setCoreState('idle');if($('music-player'))$('music-player').classList.remove('on');}
+  // Single AI call — gets artist, title, album, videoId all at once
+  const aiResult=await aiMusicLookup(query);
+
+  if(aiResult?.videoId){
+    const{videoId,title,artist,album}=aiResult;
+    currentSong=title;currentArtist=artist;
+    updateMusicUI(title,artist,album||'',null);
+    notif(`FOUND: ${artist} — ${title}`);
+    // Album art via MusicBrainz in background (best-effort, non-blocking)
+    try{
+      const q=encodeURIComponent(`recording:"${title}" AND artist:"${artist}"`);
+      mbFetch(`https://musicbrainz.org/ws/2/recording/?query=${q}&limit=3&fmt=json`).then(d=>{
+        const rid=d.recordings?.[0]?.releases?.[0]?.id;
+        const rTitle=d.recordings?.[0]?.releases?.[0]?.title||album||'';
+        if(rid)fetchAlbumArt(rid).then(url=>{if(url)updateMusicUI(title,artist,rTitle,url);});
+      }).catch(()=>{});
+    }catch(e){}
+    playYouTubeById(videoId,title,artist,album||'');
+
   }else{
-    speak(`No video found for ${displayTitle}.`);setCoreState('idle');
-    if($('music-player'))$('music-player').classList.remove('on');
+    // AI failed to return valid videoId — fall back to Piped/Invidious
+    notif('AI LOOKUP FAILED — TRYING DIRECT','warn');
+    const fallback=await searchYouTubeId(query);
+    if(fallback?.videoId){
+      currentSong=fallback.title||query;currentArtist='';
+      updateMusicUI(fallback.title||query,'','',null);
+      playYouTubeById(fallback.videoId,fallback.title||query,'','');
+    }else{
+      speak(`Couldn't find a video for ${query}. Make sure your AI model is loaded.`);
+      setCoreState('idle');if($('music-player'))$('music-player').classList.remove('on');
+    }
   }
 }
 
-// Play top tracks by artist
+// Play top tracks by artist — also uses AI
 async function playArtistTop(artistName){
   SFX.music();setCoreState('processing');
-  notif('FETCHING TOP TRACKS: '+artistName.toUpperCase());
+  notif('FINDING TOP TRACK: '+artistName.toUpperCase());
   if($('music-player'))$('music-player').classList.add('on');
   updateMusicUI('SEARCHING...','','',null);
   retryCount=0;
-  try{
-    const q=encodeURIComponent(`artist:"${artistName}"`);
-    const d=await mbFetch(`https://musicbrainz.org/ws/2/recording/?query=${q}&limit=8&fmt=json`);
-    const recs=(d.recordings||[]).sort((a,b)=>(b.score||0)-(a.score||0));
-    if(!recs.length){speak(`Couldn't find tracks for ${artistName}.`);setCoreState('idle');return;}
-    const top=recs[0];
-    const title=top.title;
-    const artist=top['artist-credit']?.[0]?.artist?.name||artistName;
-    const releaseId=top.releases?.[0]?.id||'';
-    currentSong=title;currentArtist=artist;
-    fetchAlbumArt(releaseId).then(url=>{if(url)updateMusicUI(title,artist,top.releases?.[0]?.title||'',url);});
-    updateMusicUI(title,artist,top.releases?.[0]?.title||'',null);
-    const ytResult=await searchYouTubeId(`${artist} - ${title}`);
-    if(ytResult)playYouTubeById(ytResult.videoId,title,artist,'');
-    else{speak(`Couldn't load a video for ${title}.`);setCoreState('idle');}
-  }catch(e){
-    speak(`Couldn't fetch tracks for ${artistName}.`);setCoreState('idle');
+  // Ask AI for the artist's most popular song + video ID
+  const aiResult=await aiMusicLookup(`most popular song by ${artistName}`);
+  if(aiResult?.videoId){
+    const{videoId,title,artist,album}=aiResult;
+    currentSong=title;currentArtist=artist||artistName;
+    updateMusicUI(title,artist||artistName,album||'',null);
+    notif(`TOP TRACK: ${artist||artistName} — ${title}`);
+    playYouTubeById(videoId,title,artist||artistName,album||'');
+  }else{
+    speak(`Couldn't find a top track for ${artistName}.`);setCoreState('idle');
+    if($('music-player'))$('music-player').classList.remove('on');
   }
 }
 
