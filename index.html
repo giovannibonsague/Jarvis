@@ -759,6 +759,38 @@ function showWebGPUWarning(){let w=document.getElementById('webgpu-warn');if(w)r
 function showModelLoadProgress(text,pct){let el=document.getElementById('model-load-overlay');if(!el){el=document.createElement('div');el.id='model-load-overlay';el.style.cssText="position:fixed;bottom:60px;left:50%;transform:translateX(-50%);z-index:150;background:rgba(0,5,15,0.95);border:1px solid rgba(0,216,255,0.25);border-radius:3px;padding:12px 20px;font-family:'Share Tech Mono',monospace;font-size:8px;letter-spacing:0.15em;color:rgba(0,216,255,0.8);min-width:300px;text-align:center";el.innerHTML='<div id="mlo-text" style="margin-bottom:6px"></div><div style="background:rgba(0,216,255,0.1);border-radius:2px;height:3px;overflow:hidden"><div id="mlo-bar" style="height:100%;background:var(--c);width:0%;transition:width 0.3s"></div></div>';document.body.appendChild(el);}const tt=document.getElementById('mlo-text'),b=document.getElementById('mlo-bar');if(tt)tt.textContent=text;if(b)b.style.width=pct+'%';}
 function hideModelLoadProgress(){const el=document.getElementById('model-load-overlay');if(el){el.style.opacity='0';el.style.transition='opacity 0.5s';setTimeout(function(){el.remove();},600);}}
 
+// ── API parameter helpers ──────────────────────────────────────────────────
+// Reasoning/o-series models don't support 'temperature' and require
+// 'max_completion_tokens' instead of 'max_tokens'.
+// Anthropic uses 'max_tokens' always (no change needed there).
+// Google uses 'maxOutputTokens' inside generationConfig (no change needed).
+function isReasoningModel(modelId){
+  return /^o\d|^o\d-|deepseek-reasoner|deepseek-r1/i.test(modelId);
+}
+function openAIBody(modelId,messages,sys){
+  const reasoning=isReasoningModel(modelId);
+  const body={model:modelId,messages:messages};
+  if(reasoning){
+    body.max_completion_tokens=600; // reasoning models need more tokens
+  }else{
+    body.max_tokens=300;
+    body.temperature=0.8;
+  }
+  return body;
+}
+// DeepSeek-reasoner also doesn't support system role in messages array —
+// it must be injected as the first user message instead.
+function deepseekMessages(messages,sys){
+  if(isReasoningModel(currentModel)){
+    const noSys=messages.filter(function(m){return m.role!=='system';});
+    if(noSys.length&&noSys[0].role==='user'){
+      noSys[0]={role:'user',content:'[Context: '+sys+']\n\n'+noSys[0].content};
+    }
+    return noSys;
+  }
+  return messages;
+}
+
 async function sendAI(msg){
   setCoreState('processing');SFX.processingStart();
   if(!webllmReady&&currentProvider==='webllm'){SFX.error();speak('The AI model is still loading. Please wait.');setCoreState('idle');return;}
@@ -770,16 +802,77 @@ async function sendAI(msg){
   const messages=[{role:'system',content:sys}].concat(convoHistory.slice(-6));
   try{
     let resp='';
-    if(currentProvider==='openai'){const r=await fetch('https://api.openai.com/v1/chat/completions',{method:'POST',signal:AbortSignal.timeout(25000),headers:{'Content-Type':'application/json','Authorization':'Bearer '+keys.openai},body:JSON.stringify({model:currentModel,messages:messages,max_tokens:300,temperature:0.8})});if(!r.ok)throw new Error('HTTP '+r.status);resp=((await r.json()).choices[0].message.content||'').trim();}
-    else if(currentProvider==='anthropic'){const r=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',signal:AbortSignal.timeout(25000),headers:{'Content-Type':'application/json','x-api-key':keys.anthropic,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},body:JSON.stringify({model:currentModel,system:sys,messages:convoHistory.slice(-6).filter(function(m){return m.role!=='system';}),max_tokens:300})});if(!r.ok)throw new Error('HTTP '+r.status);resp=((await r.json()).content[0].text||'').trim();}
-    else if(currentProvider==='deepseek'){const r=await fetch('https://api.deepseek.com/chat/completions',{method:'POST',signal:AbortSignal.timeout(25000),headers:{'Content-Type':'application/json','Authorization':'Bearer '+keys.deepseek},body:JSON.stringify({model:currentModel,messages:messages,max_tokens:300,temperature:0.8})});if(!r.ok)throw new Error('HTTP '+r.status);resp=((await r.json()).choices[0].message.content||'').trim();}
-    else if(currentProvider==='grok'){const r=await fetch('https://api.x.ai/v1/chat/completions',{method:'POST',signal:AbortSignal.timeout(25000),headers:{'Content-Type':'application/json','Authorization':'Bearer '+keys.grok},body:JSON.stringify({model:currentModel,messages:messages,max_tokens:300,temperature:0.8})});if(!r.ok)throw new Error('HTTP '+r.status);resp=((await r.json()).choices[0].message.content||'').trim();}
-    else if(currentProvider==='google'){const gm=convoHistory.slice(-6).map(function(m){return{role:m.role==='assistant'?'model':'user',parts:[{text:m.content}]};});const r=await fetch('https://generativelanguage.googleapis.com/v1beta/models/'+currentModel+':generateContent?key='+keys.google,{method:'POST',signal:AbortSignal.timeout(25000),headers:{'Content-Type':'application/json'},body:JSON.stringify({system_instruction:{parts:[{text:sys}]},contents:gm,generationConfig:{maxOutputTokens:300,temperature:0.8}})});if(!r.ok)throw new Error('HTTP '+r.status);resp=((await r.json()).candidates[0].content.parts[0].text||'').trim();}
-    else if(currentProvider==='mistral'){const r=await fetch('https://api.mistral.ai/v1/chat/completions',{method:'POST',signal:AbortSignal.timeout(25000),headers:{'Content-Type':'application/json','Authorization':'Bearer '+keys.mistral},body:JSON.stringify({model:currentModel,messages:messages,max_tokens:300,temperature:0.8})});if(!r.ok)throw new Error('HTTP '+r.status);resp=((await r.json()).choices[0].message.content||'').trim();}
-    else{const reply=await webllmEngine.chat.completions.create({messages:messages,temperature:0.8,max_tokens:250,stream:false});resp=(reply.choices[0].message.content||'').trim();}
+
+    if(currentProvider==='openai'){
+      // FIX: o3/o4/gpt-5+ require max_completion_tokens, not max_tokens.
+      //      Reasoning models also don't support temperature.
+      const body=openAIBody(currentModel,messages,sys);
+      const r=await fetch('https://api.openai.com/v1/chat/completions',{method:'POST',signal:AbortSignal.timeout(30000),headers:{'Content-Type':'application/json','Authorization':'Bearer '+keys.openai},body:JSON.stringify(body)});
+      if(!r.ok){const errData=await r.json().catch(function(){return{};});throw new Error('HTTP '+r.status+': '+(errData.error&&errData.error.message||'Unknown error'));}
+      resp=((await r.json()).choices[0].message.content||'').trim();
+    }
+
+    else if(currentProvider==='anthropic'){
+      // Anthropic always uses max_tokens — no change needed, already correct.
+      const r=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',signal:AbortSignal.timeout(25000),headers:{'Content-Type':'application/json','x-api-key':keys.anthropic,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},body:JSON.stringify({model:currentModel,system:sys,messages:convoHistory.slice(-6).filter(function(m){return m.role!=='system';}),max_tokens:300})});
+      if(!r.ok){const errData=await r.json().catch(function(){return{};});throw new Error('HTTP '+r.status+': '+(errData.error&&errData.error.message||'Unknown error'));}
+      resp=((await r.json()).content[0].text||'').trim();
+    }
+
+    else if(currentProvider==='deepseek'){
+      // FIX: deepseek-reasoner doesn't support system role or temperature.
+      const reasoning=isReasoningModel(currentModel);
+      const dsMessages=deepseekMessages(messages,sys);
+      const dsBody={model:currentModel,messages:dsMessages};
+      if(reasoning){dsBody.max_tokens=600;}
+      else{dsBody.max_tokens=300;dsBody.temperature=0.8;}
+      const r=await fetch('https://api.deepseek.com/chat/completions',{method:'POST',signal:AbortSignal.timeout(30000),headers:{'Content-Type':'application/json','Authorization':'Bearer '+keys.deepseek},body:JSON.stringify(dsBody)});
+      if(!r.ok){const errData=await r.json().catch(function(){return{};});throw new Error('HTTP '+r.status+': '+(errData.error&&errData.error.message||'Unknown error'));}
+      resp=((await r.json()).choices[0].message.content||'').trim();
+    }
+
+    else if(currentProvider==='grok'){
+      // Grok follows OpenAI-compatible API — apply same reasoning model fix.
+      const body=openAIBody(currentModel,messages,sys);
+      const r=await fetch('https://api.x.ai/v1/chat/completions',{method:'POST',signal:AbortSignal.timeout(25000),headers:{'Content-Type':'application/json','Authorization':'Bearer '+keys.grok},body:JSON.stringify(body)});
+      if(!r.ok){const errData=await r.json().catch(function(){return{};});throw new Error('HTTP '+r.status+': '+(errData.error&&errData.error.message||'Unknown error'));}
+      resp=((await r.json()).choices[0].message.content||'').trim();
+    }
+
+    else if(currentProvider==='google'){
+      // Google uses maxOutputTokens inside generationConfig — already correct.
+      // FIX: add error body parsing for better error messages.
+      const gm=convoHistory.slice(-6).map(function(m){return{role:m.role==='assistant'?'model':'user',parts:[{text:m.content}]};});
+      const r=await fetch('https://generativelanguage.googleapis.com/v1beta/models/'+currentModel+':generateContent?key='+keys.google,{method:'POST',signal:AbortSignal.timeout(25000),headers:{'Content-Type':'application/json'},body:JSON.stringify({system_instruction:{parts:[{text:sys}]},contents:gm,generationConfig:{maxOutputTokens:300,temperature:0.8}})});
+      if(!r.ok){const errData=await r.json().catch(function(){return{};});throw new Error('HTTP '+r.status+': '+(errData.error&&errData.error.message||'Unknown error'));}
+      const gData=await r.json();
+      resp=((gData.candidates&&gData.candidates[0]&&gData.candidates[0].content&&gData.candidates[0].content.parts&&gData.candidates[0].content.parts[0]&&gData.candidates[0].content.parts[0].text)||'').trim();
+    }
+
+    else if(currentProvider==='mistral'){
+      // Mistral uses standard max_tokens + temperature — correct as-is.
+      const r=await fetch('https://api.mistral.ai/v1/chat/completions',{method:'POST',signal:AbortSignal.timeout(25000),headers:{'Content-Type':'application/json','Authorization':'Bearer '+keys.mistral},body:JSON.stringify({model:currentModel,messages:messages,max_tokens:300,temperature:0.8})});
+      if(!r.ok){const errData=await r.json().catch(function(){return{};});throw new Error('HTTP '+r.status+': '+(errData.error&&errData.error.message||'Unknown error'));}
+      resp=((await r.json()).choices[0].message.content||'').trim();
+    }
+
+    else{
+      // WebLLM local — no server-side restrictions.
+      const reply=await webllmEngine.chat.completions.create({messages:messages,temperature:0.8,max_tokens:250,stream:false});
+      resp=(reply.choices[0].message.content||'').trim();
+    }
+
     if(resp.startsWith('SEARCH:')){const q=resp.replace('SEARCH:','').trim();const result=await webSearch(q);if(result)convoHistory.push({role:'assistant',content:result});SFX.processingEnd();setCoreState('idle');return;}
     convoHistory.push({role:'assistant',content:resp});SFX.processingEnd();speak(resp);
-  }catch(e){SFX.error();speak('I encountered an error. '+e.message.slice(0,60));convoHistory.pop();setTimeout(function(){setCoreState('idle');},600);}
+  }catch(e){
+    SFX.error();
+    // Show the actual API error message so the user knows what went wrong
+    const msg2=e.message||'Unknown error';
+    notif('API ERROR: '+msg2.slice(0,55).toUpperCase(),'warn');
+    speak('API error: '+msg2.slice(0,80));
+    convoHistory.pop();
+    setTimeout(function(){setCoreState('idle');},600);
+  }
 }
 
 // HAND TRACKING
