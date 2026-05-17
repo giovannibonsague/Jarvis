@@ -348,11 +348,11 @@ function wireBotButtons(){
   if(btnCmds)btnCmds.addEventListener('click',function(){showCommandList();});
   const btnVoice=$('btn-voice');
   if(btnVoice){
-    btnVoice.addEventListener('click',function(){showELSettings();});
+    btnVoice.addEventListener('click',function(){showVoiceSettings();});
     btnVoice.addEventListener('mouseover',function(){btnVoice.style.color='#9955ff';});
     btnVoice.addEventListener('mouseout',function(){btnVoice.style.color='rgba(153,85,255,0.5)';});
     // Show a dot if ElevenLabs key is already set
-    if(getELKey())btnVoice.textContent='VOICE ●';
+    btnVoice.textContent='VOICE ●';
   }
   const ppAdd=$('profile-add-btn'),ppSave=$('profile-save-btn'),ppClose=$('profile-close-btn'),botUser=$('bot-user-btn');
   if(ppAdd)ppAdd.addEventListener('click',addProfileField);
@@ -426,36 +426,15 @@ const SFX={
 };
 window.SFX=SFX;
 
-// VOICE
-// ── TTS ENGINE ────────────────────────────────────────────────────────────────
-// Uses ElevenLabs API when a key is stored (sounds great).
-// Falls back to Web Speech API (browser built-in) otherwise.
-// To get a free ElevenLabs key: elevenlabs.io → Sign up → Profile → API Key
-// Free tier: 10,000 chars/month — plenty for daily use.
+// VOICE — Local Web Speech API (browser built-in, zero latency, works offline)
+// ─────────────────────────────────────────────────────────────────────────────
+// Picks the best available voice on the device using a scoring system.
+// Tune speed/pitch/voice from the VOICE button in the bottom bar.
+
+const GOOG_YT_API_KEY='AIzaSyB1W6o3kecSl-W0kFEG8v01XqQizpqwAE4';
 
 let jVoice=null;
 let ttsQueue=[];
-let ttsPlaying=false;
-let currentTTSAudio=null;
-
-// ElevenLabs voice IDs — these are free public voices
-const EL_VOICES={
-  'Adam':       '29vD33N1CtxCmqQRPOHJ',  // deep, authoritative
-  'Antoni':     'ErXwobaYiN019PkySvjV',  // warm, British
-  'Arnold':     'VR6AewLTigWG4xSOukaG',  // crisp, strong
-  'Callum':     'N2lVS1w4EtoT3dr4eOWO',  // neutral, clear
-  'Charlie':    'IKne3meq5aSn9XLyUdCD',  // casual, friendly
-  'Daniel':     'onwK4e9ZLuTAKqWW03F9',  // British, news-reader (best for JARVIS)
-  'Ethan':      'g5CIjZEefAph4nQFvHAz',  // soft, conversational
-  'Liam':       'TX3LPaxmHKxFdv7VOQHJ',  // confident, clear
-};
-const EL_DEFAULT_VOICE='Daniel';
-
-function getELKey(){return localStorage.getItem('jarvis_el_key')||'';}
-function getELVoiceId(){
-  const name=localStorage.getItem('jarvis_el_voice')||EL_DEFAULT_VOICE;
-  return EL_VOICES[name]||EL_VOICES[EL_DEFAULT_VOICE];
-}
 
 function cleanTextForSpeech(text){
   return text
@@ -463,183 +442,193 @@ function cleanTextForSpeech(text){
     .replace(/[*_~`#]/g,'')
     .replace(/https?:\/\/\S+/g,'a link')
     .replace(/```[\s\S]*?```/g,'a code block')
-    .replace(/\s{2,}/g,' ')
     .replace(/&amp;/g,'and').replace(/&lt;/g,'').replace(/&gt;/g,'')
+    .replace(/\s{2,}/g,' ')
     .trim();
 }
 
-async function speakElevenLabs(text){
-  const key=getELKey();
-  if(!key)return false;
-  try{
-    const res=await fetch('https://api.elevenlabs.io/v1/text-to-speech/'+getELVoiceId()+'/stream',{
-      method:'POST',
-      headers:{'xi-api-key':key,'Content-Type':'application/json','Accept':'audio/mpeg'},
-      body:JSON.stringify({
-        text:text,
-        model_id:'eleven_turbo_v2',
-        voice_settings:{stability:0.45,similarity_boost:0.82,style:0.2,use_speaker_boost:true}
-      }),
-      signal:AbortSignal.timeout(15000)
-    });
-    if(!res.ok){
-      if(res.status===401){notif('ELEVENLABS KEY INVALID','warn');localStorage.removeItem('jarvis_el_key');}
-      else if(res.status===429){notif('ELEVENLABS QUOTA REACHED','warn');}
-      return false;
-    }
-    const blob=await res.blob();
-    const url=URL.createObjectURL(blob);
-    return new Promise(function(resolve){
-      const audio=new Audio(url);
-      currentTTSAudio=audio;
-      audio.onended=function(){URL.revokeObjectURL(url);currentTTSAudio=null;resolve(true);};
-      audio.onerror=function(){URL.revokeObjectURL(url);currentTTSAudio=null;resolve(false);};
-      audio.play().catch(function(){URL.revokeObjectURL(url);currentTTSAudio=null;resolve(false);});
-    });
-  }catch(e){console.warn('[EL TTS]',e.message);return false;}
-}
-
-// Web Speech fallback — picks best available voice
+// Score available voices — higher = better. -1 = reject (female/unwanted).
 function scoreVoice(v){
   const n=v.name,l=v.lang||'';
-  if(/female|samantha|victoria|karen|zira|tessa|moira|fiona|veena|allison|ava|susan|kate|emily|joanna|ivy|kendra|kimberly|salli|nicole/i.test(n))return -1;
+  // Reject female voices
+  if(/female|samantha|victoria|karen|zira|tessa|moira|fiona|veena|allison|ava|susan|kate|emily|joanna|ivy|kendra|kimberly|salli|nicole|aria|jenny|guy.*female/i.test(n))return -1;
   let s=0;
+  // Tier 1 — best cross-platform male voices
   if(n==='Google UK English Male')s=100;
-  else if(n==='Daniel')s=98;
-  else if(/Microsoft (Guy|Ryan|Liam|Steffan|Eric|Christopher|Davis|Tony|William)/i.test(n))s=95;
+  else if(n==='Daniel')s=98;              // macOS/iOS en-GB male
+  else if(/Microsoft (Guy|Ryan|Liam|Steffan|Eric|Christopher|Davis|Tony|William|James|Mark)/i.test(n))s=95;
   else if(/Google.*Male/i.test(n))s=90;
-  else if(n==='Alex')s=85;
-  else if(/Microsoft.*English/i.test(n))s=80;
-  else if(l==='en-GB')s=70;
-  else if(l.startsWith('en'))s=50;
-  if(l==='en-US'&&s>0&&s<90)s+=5;
+  else if(n==='Alex')s=85;               // macOS en-US
+  else if(/Microsoft.*(David|George|Stefan)/i.test(n))s=82;
+  else if(/Microsoft.*English/i.test(n)&&!/Zira|Hazel/i.test(n))s=78;
+  else if(l==='en-GB'&&s===0)s=72;
+  else if(l==='en-AU'&&s===0)s=68;
+  else if(l.startsWith('en')&&s===0)s=55;
+  // Slight boost for locally installed voices (not remote)
+  if(!v.localService)s=Math.max(0,s-8);
   return s;
 }
+
 function findBestVoice(){
   const vv=speechSynthesis.getVoices();
   if(!vv||!vv.length)return null;
+  // Respect saved preference
+  const saved=localStorage.getItem('jarvis_voice_name');
+  if(saved){const found=vv.find(function(v){return v.name===saved;});if(found)return found;}
   let best=null,bestScore=-1;
   vv.forEach(function(v){const sc=scoreVoice(v);if(sc>bestScore){bestScore=sc;best=v;}});
   return bestScore>0?best:null;
 }
+
 function initVoice(){jVoice=findBestVoice();}
 speechSynthesis.onvoiceschanged=initVoice;
-setTimeout(initVoice,100);setTimeout(initVoice,600);setTimeout(initVoice,1500);
-
-function speakWebSpeech(text,onDone){
-  if(!jVoice)jVoice=findBestVoice();
-  const u=new SpeechSynthesisUtterance(text);
-  if(jVoice)u.voice=jVoice;
-  u.rate=0.94;u.pitch=0.92;u.volume=1;
-  const words=(text.match(/\S+/g)||[]).length;
-  let watchdog=setTimeout(function(){
-    if(speaking){speechSynthesis.cancel();speaking=false;clearSpoke();setCoreState('idle');if(onDone)onDone();}
-  },words/2.8*1000+4000);
-  u.onend=function(){clearTimeout(watchdog);if(onDone)onDone();};
-  u.onerror=function(e){clearTimeout(watchdog);if(e.error&&e.error!=='interrupted')console.warn('[WebSpeech]',e.error);if(onDone)onDone();};
-  speechSynthesis.speak(u);
-}
+// Chrome loads voices async — retry several times
+setTimeout(initVoice,50);
+setTimeout(initVoice,300);
+setTimeout(initVoice,800);
+setTimeout(initVoice,2000);
 
 function speak(text,force){
   force=force||false;
   if(speaking&&!force)return;
-  if(force){
-    // Stop any current audio
-    if(currentTTSAudio){currentTTSAudio.pause();currentTTSAudio=null;}
-    speechSynthesis.cancel();
-    ttsQueue=[];
-  }
+  if(force)speechSynthesis.cancel();
   speaking=true;setCoreState('active');SFX.speakStart();
   if(recog){try{recog.abort();}catch(e){}}
   const clean=cleanTextForSpeech(text);
   showSpoke(clean);
   const words=(clean.match(/\S+/g)||[]).length;
-  const restartDelay=1500+words*75;
+  const restartDelay=1400+words*70;
 
-  function onDone(){
-    speaking=false;clearSpoke();
-    setTimeout(function(){if(!listening)setCoreState(wakeActive?'listening':'idle');},300);
-    setTimeout(function(){if(micReady&&recog&&!listening&&!speaking)tryStartRecog();},restartDelay);
-  }
+  if(!jVoice)jVoice=findBestVoice();
 
-  if(getELKey()){
-    // ElevenLabs path
-    speakElevenLabs(clean).then(function(ok){
-      if(!ok){
-        // Fallback to Web Speech if EL fails
-        speakWebSpeech(clean,onDone);
-      }else{
-        onDone();
-      }
-    });
-  }else{
-    // Web Speech path
-    speakWebSpeech(clean,onDone);
+  // Chrome bug: utterances > ~200 words get silently cut off.
+  // Split into sentences and chain them.
+  const sentences=clean.match(/[^.!?\n]+[.!?\n]*/g)||[clean];
+  let idx=0;
+
+  function sayNext(){
+    if(idx>=sentences.length){
+      speaking=false;clearSpoke();
+      setTimeout(function(){if(!listening)setCoreState(wakeActive?'listening':'idle');},300);
+      setTimeout(function(){if(micReady&&recog&&!listening&&!speaking)tryStartRecog();},restartDelay);
+      return;
+    }
+    const chunk=sentences[idx++].trim();
+    if(!chunk){sayNext();return;}
+    const u=new SpeechSynthesisUtterance(chunk);
+    if(jVoice)u.voice=jVoice;
+    // Load saved settings
+    u.rate=parseFloat(localStorage.getItem('jarvis_tts_rate')||'0.95');
+    u.pitch=parseFloat(localStorage.getItem('jarvis_tts_pitch')||'0.85');
+    u.volume=1;
+    // Watchdog per chunk
+    const chunkWords=(chunk.match(/\S+/g)||[]).length;
+    const wdog=setTimeout(function(){
+      if(speaking){speechSynthesis.cancel();sayNext();}
+    },chunkWords/2.5*1000+3000);
+    u.onend=function(){clearTimeout(wdog);sayNext();};
+    u.onerror=function(e){
+      clearTimeout(wdog);
+      if(e.error&&e.error!=='interrupted')console.warn('[TTS]',e.error);
+      sayNext();
+    };
+    speechSynthesis.speak(u);
   }
+  sayNext();
 }
 
-// ElevenLabs settings panel
-function showELSettings(){
-  const old=document.getElementById('el-settings');if(old){old.remove();SFX.popupClose();return;}
+// ── Voice settings panel ──────────────────────────────────────────────────────
+function showVoiceSettings(){
+  const old=document.getElementById('voice-settings-panel');
+  if(old){old.remove();SFX.popupClose();return;}
   SFX.popupOpen();
-  const panel=document.createElement('div');panel.id='el-settings';
-  panel.style.cssText="position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:400;background:rgba(0,4,16,0.98);border:1px solid rgba(153,85,255,0.4);border-radius:4px;padding:24px 28px;font-family:'Share Tech Mono',monospace;width:420px;";
-  const currentKey=getELKey();
-  const currentVoiceName=localStorage.getItem('jarvis_el_voice')||EL_DEFAULT_VOICE;
-  const voiceOptions=Object.keys(EL_VOICES).map(function(name){
-    return '<option value="'+name+'"'+(name===currentVoiceName?' selected':'')+'>'+name+'</option>';
+
+  const vv=speechSynthesis.getVoices().filter(function(v){return v.lang.startsWith('en');});
+  const savedName=localStorage.getItem('jarvis_voice_name')||(jVoice&&jVoice.name)||'';
+  const savedRate=localStorage.getItem('jarvis_tts_rate')||'0.95';
+  const savedPitch=localStorage.getItem('jarvis_tts_pitch')||'0.85';
+
+  const voiceOpts=vv.map(function(v){
+    const score=scoreVoice(v);
+    const tag=score>=90?'★★★':score>=75?'★★':score>=50?'★':'';
+    return '<option value="'+v.name+'"'+(v.name===savedName?' selected':'')+'>'+tag+' '+v.name+(v.localService?' (local)':' (network)')+'</option>';
   }).join('');
+
+  const panel=document.createElement('div');
+  panel.id='voice-settings-panel';
+  panel.style.cssText="position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:400;background:rgba(0,4,16,0.98);border:1px solid rgba(0,216,255,0.35);border-radius:4px;padding:24px 28px;font-family:'Share Tech Mono',monospace;width:420px;max-height:80vh;display:flex;flex-direction:column;overflow:hidden;";
   panel.innerHTML=
-    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">'+
-    '<div style="font-family:\'Orbitron\',monospace;font-size:11px;letter-spacing:0.3em;color:#9955ff">◈ ELEVENLABS TTS</div>'+
-    '<span id="el-close" style="cursor:pointer;color:rgba(153,85,255,0.5);font-size:16px">✕</span></div>'+
-    '<div style="font-size:8px;color:rgba(0,216,255,0.5);line-height:1.9;margin-bottom:14px">'+
-    'Free tier: <span style="color:#00d8ff">10,000 chars/month</span> — perfect for daily use.<br>'+
-    'Sign up at <span style="color:#9955ff">elevenlabs.io</span> → Profile → API Keys</div>'+
-    '<div style="margin-bottom:10px"><div style="font-size:7px;letter-spacing:0.2em;color:rgba(153,85,255,0.5);margin-bottom:5px">API KEY '+(currentKey?'<span style="color:rgba(0,255,136,0.7)">● SAVED</span>':'<span style="color:rgba(255,80,80,0.5)">○ NOT SET</span>')+'</div>'+
-    '<div style="display:flex;gap:6px"><input id="el-key-inp" type="password" placeholder="sk_..." value="" style="flex:1;background:rgba(153,85,255,0.04);border:1px solid rgba(153,85,255,0.25);border-radius:2px;padding:7px 9px;font-family:\'Share Tech Mono\',monospace;font-size:8px;color:#9955ff;outline:none">'+
-    '<button id="el-key-save" style="font-family:\'Share Tech Mono\',monospace;font-size:7px;letter-spacing:0.15em;color:rgba(0,255,136,0.8);border:1px solid rgba(0,255,136,0.3);background:rgba(0,255,136,0.05);padding:7px 12px;cursor:pointer;border-radius:2px;white-space:nowrap">SAVE</button>'+
-    (currentKey?'<button id="el-key-clear" style="font-family:\'Share Tech Mono\',monospace;font-size:7px;color:rgba(255,80,80,0.5);border:1px solid rgba(255,80,80,0.15);background:transparent;padding:7px 10px;cursor:pointer;border-radius:2px">CLEAR</button>':'')+
-    '</div></div>'+
-    '<div style="margin-bottom:14px"><div style="font-size:7px;letter-spacing:0.2em;color:rgba(153,85,255,0.5);margin-bottom:5px">VOICE</div>'+
-    '<select id="el-voice-sel" style="width:100%;background:rgba(153,85,255,0.04);border:1px solid rgba(153,85,255,0.25);border-radius:2px;padding:7px 9px;font-family:\'Share Tech Mono\',monospace;font-size:8px;color:#9955ff;outline:none;letter-spacing:0.1em">'+voiceOptions+'</select></div>'+
-    '<button id="el-test" style="width:100%;font-family:\'Orbitron\',monospace;font-size:8px;letter-spacing:0.2em;color:#9955ff;border:1px solid rgba(153,85,255,0.35);background:rgba(153,85,255,0.06);padding:9px;cursor:pointer;border-radius:2px">▶ TEST VOICE</button>'+
-    '<div id="el-status" style="font-size:7px;color:rgba(153,85,255,0.4);margin-top:8px;min-height:14px;text-align:center"></div>';
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-shrink:0">'+
+      '<div style="font-family:\'Orbitron\',monospace;font-size:11px;letter-spacing:0.3em;color:#00d8ff">◈ VOICE SETTINGS</div>'+
+      '<span id="vs-close" style="cursor:pointer;color:rgba(0,216,255,0.4);font-size:18px;padding:0 4px">✕</span>'+
+    '</div>'+
+    '<div style="font-size:7px;color:rgba(0,216,255,0.35);margin-bottom:14px;line-height:1.8;flex-shrink:0">'+
+      'Local browser TTS — zero latency, works offline.<br>'+
+      '<span style="color:rgba(0,216,255,0.5)">★★★ = best quality &nbsp; local = on-device (fastest)</span></div>'+
+    '<div style="overflow-y:auto;flex:1;display:flex;flex-direction:column;gap:12px">'+
+    '<div>'+
+      '<div style="font-size:7px;letter-spacing:0.2em;color:rgba(0,216,255,0.45);margin-bottom:5px">VOICE</div>'+
+      '<select id="vs-voice" style="width:100%;background:rgba(0,216,255,0.04);border:1px solid rgba(0,216,255,0.2);border-radius:2px;padding:7px 9px;font-family:\'Share Tech Mono\',monospace;font-size:8px;color:#00d8ff;outline:none;max-height:120px">'+voiceOpts+'</select>'+
+    '</div>'+
+    '<div>'+
+      '<div style="font-size:7px;letter-spacing:0.2em;color:rgba(0,216,255,0.45);margin-bottom:4px">SPEED &nbsp;<span id="vs-rate-lbl" style="color:#00d8ff">'+savedRate+'</span></div>'+
+      '<input id="vs-rate" type="range" min="0.6" max="1.4" step="0.05" value="'+savedRate+'" style="width:100%;accent-color:#00d8ff">'+
+      '<div style="display:flex;justify-content:space-between;font-size:6px;color:rgba(0,216,255,0.25);margin-top:2px"><span>SLOWER</span><span>FASTER</span></div>'+
+    '</div>'+
+    '<div>'+
+      '<div style="font-size:7px;letter-spacing:0.2em;color:rgba(0,216,255,0.45);margin-bottom:4px">PITCH &nbsp;<span id="vs-pitch-lbl" style="color:#00d8ff">'+savedPitch+'</span></div>'+
+      '<input id="vs-pitch" type="range" min="0.5" max="1.5" step="0.05" value="'+savedPitch+'" style="width:100%;accent-color:#00d8ff">'+
+      '<div style="display:flex;justify-content:space-between;font-size:6px;color:rgba(0,216,255,0.25);margin-top:2px"><span>DEEPER</span><span>HIGHER</span></div>'+
+    '</div>'+
+    '<div style="display:flex;gap:8px;flex-shrink:0">'+
+      '<button id="vs-test" style="flex:1;font-family:\'Orbitron\',monospace;font-size:8px;letter-spacing:0.15em;color:#00d8ff;border:1px solid rgba(0,216,255,0.35);background:rgba(0,216,255,0.06);padding:9px;cursor:pointer;border-radius:2px">▶ TEST</button>'+
+      '<button id="vs-save" style="flex:1;font-family:\'Orbitron\',monospace;font-size:8px;letter-spacing:0.15em;color:#00ff88;border:1px solid rgba(0,255,136,0.35);background:rgba(0,255,136,0.06);padding:9px;cursor:pointer;border-radius:2px">✓ SAVE</button>'+
+    '</div>'+
+    '<div id="vs-status" style="font-size:7px;color:rgba(0,216,255,0.35);text-align:center;min-height:14px;flex-shrink:0"></div>'+
+    '</div>';
+
   document.body.appendChild(panel);
 
-  document.getElementById('el-close').addEventListener('click',function(){panel.remove();SFX.popupClose();});
-  document.getElementById('el-key-save').addEventListener('click',function(){
-    const k=document.getElementById('el-key-inp').value.trim();
-    if(!k){document.getElementById('el-status').textContent='PASTE YOUR API KEY FIRST';return;}
-    localStorage.setItem('jarvis_el_key',k);
-    document.getElementById('el-status').textContent='KEY SAVED ✓';
-    SFX.confirm();notif('ELEVENLABS KEY SAVED');
-    setTimeout(function(){panel.remove();SFX.popupClose();},800);
+  const setStatus=function(msg){const s=document.getElementById('vs-status');if(s)s.textContent=msg;};
+
+  document.getElementById('vs-close').addEventListener('click',function(){panel.remove();SFX.popupClose();});
+
+  document.getElementById('vs-rate').addEventListener('input',function(){
+    const l=document.getElementById('vs-rate-lbl');if(l)l.textContent=this.value;
   });
-  const clearBtn=document.getElementById('el-key-clear');
-  if(clearBtn)clearBtn.addEventListener('click',function(){
-    localStorage.removeItem('jarvis_el_key');
-    document.getElementById('el-status').textContent='KEY CLEARED — USING BROWSER TTS';
-    SFX.confirm();notif('ELEVENLABS KEY CLEARED');
-    setTimeout(function(){panel.remove();SFX.popupClose();},800);
+  document.getElementById('vs-pitch').addEventListener('input',function(){
+    const l=document.getElementById('vs-pitch-lbl');if(l)l.textContent=this.value;
   });
-  document.getElementById('el-voice-sel').addEventListener('change',function(){
-    localStorage.setItem('jarvis_el_voice',this.value);
-    document.getElementById('el-status').textContent='VOICE SET TO '+this.value.toUpperCase();
+
+  document.getElementById('vs-test').addEventListener('click',function(){
+    // Apply current slider values immediately for test
+    const name=document.getElementById('vs-voice').value;
+    const rate=document.getElementById('vs-rate').value;
+    const pitch=document.getElementById('vs-pitch').value;
+    localStorage.setItem('jarvis_voice_name',name);
+    localStorage.setItem('jarvis_tts_rate',rate);
+    localStorage.setItem('jarvis_tts_pitch',pitch);
+    jVoice=findBestVoice();
+    setStatus('SPEAKING...');
+    speak('Jarvis online. All systems nominal. Ready to assist, '+userName+'.',true);
+    setTimeout(function(){setStatus('');},4000);
   });
-  document.getElementById('el-test').addEventListener('click',function(){
-    const voiceName=document.getElementById('el-voice-sel').value;
-    localStorage.setItem('jarvis_el_voice',voiceName);
-    document.getElementById('el-status').textContent='GENERATING...';
-    const testKey=document.getElementById('el-key-inp').value.trim()||getELKey();
-    if(!testKey){document.getElementById('el-status').textContent='SAVE YOUR KEY FIRST';return;}
-    localStorage.setItem('jarvis_el_key',testKey);
-    speak('Jarvis online. All systems nominal. How can I assist you today?',true);
-    document.getElementById('el-status').textContent='PLAYING TEST...';
+
+  document.getElementById('vs-save').addEventListener('click',function(){
+    const name=document.getElementById('vs-voice').value;
+    const rate=document.getElementById('vs-rate').value;
+    const pitch=document.getElementById('vs-pitch').value;
+    localStorage.setItem('jarvis_voice_name',name);
+    localStorage.setItem('jarvis_tts_rate',rate);
+    localStorage.setItem('jarvis_tts_pitch',pitch);
+    jVoice=findBestVoice();
+    setStatus('SAVED ✓');SFX.confirm();notif('VOICE SETTINGS SAVED');
+    setTimeout(function(){panel.remove();SFX.popupClose();},700);
   });
+
   panel.addEventListener('click',function(e){if(e.target===panel){panel.remove();SFX.popupClose();}});
 }
-window.showELSettings=showELSettings;
+window.showVoiceSettings=showVoiceSettings;
 function showSpoke(text){const s=text.split(/[.!?]/);$('spoke-main').textContent=s[0].trim();$('spoke-sub').textContent=(s[1]||'').trim();$('spoke').classList.add('on');}
 function clearSpoke(){setTimeout(function(){$('spoke').classList.remove('on');},1400);}
 
@@ -698,7 +687,7 @@ const PIPED=[
   'https://pipedapi.darkness.services',
 ];
 
-function getYTKey(){return localStorage.getItem('jarvis_yt_key')||'';}
+function getYTKey(){return GOOG_YT_API_KEY;}
 
 async function searchYouTubeAPI(query,max){
   const key=getYTKey();
@@ -1028,7 +1017,7 @@ function handleCmd(raw){
   const topM=m.match(/^(?:play\s+)?(?:top\s+tracks?\s+by|best\s+(?:songs?\s+)?(?:by|from)|music\s+by)\s+(.+)/i);
   if(topM){playArtistTop(topM[1].trim());return;}
   // ElevenLabs / TTS settings
-  if(m.match(/(?:elevenlabs?|el\s+key|tts\s+key|voice\s+settings?|set\s+(?:tts|voice|elevenlabs?))/i)){showELSettings();speak('Opening voice settings.');return;}
+  if(m.match(/(?:voice\s+settings?|tts\s+settings?|set\s+(?:tts|voice))/i)){showVoiceSettings();speak('Opening voice settings.');return;}
   // YouTube API key management
   if(m.match(/(?:set|add|enter|save)\s+(?:youtube|yt)\s+(?:api\s+)?key/i)){showYTKeyPrompt();speak('Opening YouTube API key panel.');return;}
   const playM=m.match(/^(?:play(?:\s+me|\s+some|\s+a)?|put\s+on|listen\s+to|start\s+playing|can\s+you\s+play)\s+(.+)/i);
