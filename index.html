@@ -245,7 +245,7 @@ html,body{width:100%;height:100%;overflow:hidden;background:#000;cursor:none;fon
       <span id="btn-notes" style="font-size:7px;letter-spacing:0.12em;color:rgba(0,216,255,0.35);cursor:pointer;padding:2px 8px;border:1px solid rgba(0,216,255,0.12);border-radius:1px">NOTES</span>
       <span id="btn-clip" style="font-size:7px;letter-spacing:0.12em;color:rgba(0,216,255,0.35);cursor:pointer;padding:2px 8px;border:1px solid rgba(0,216,255,0.12);border-radius:1px">CLIP</span>
       <span id="btn-cmds" style="font-size:7px;letter-spacing:0.12em;color:rgba(0,216,255,0.35);cursor:pointer;padding:2px 8px;border:1px solid rgba(0,216,255,0.12);border-radius:1px">CMDS</span>
-      <span id="btn-voice" style="font-size:7px;letter-spacing:0.12em;color:rgba(153,85,255,0.5);cursor:pointer;padding:2px 8px;border:1px solid rgba(153,85,255,0.2);border-radius:1px" title="ElevenLabs TTS Settings">VOICE</span>
+      <span id="btn-voice" style="font-size:7px;letter-spacing:0.12em;color:rgba(0,216,255,0.35);cursor:pointer;padding:2px 8px;border:1px solid rgba(0,216,255,0.12);border-radius:1px" title="Voice Settings">VOICE</span>
     </div>
     <div class="bi" style="margin-left:auto"><button id="bot-user-btn">USER</button></div>
   </div>
@@ -349,10 +349,10 @@ function wireBotButtons(){
   const btnVoice=$('btn-voice');
   if(btnVoice){
     btnVoice.addEventListener('click',function(){showVoiceSettings();});
-    btnVoice.addEventListener('mouseover',function(){btnVoice.style.color='#9955ff';});
-    btnVoice.addEventListener('mouseout',function(){btnVoice.style.color='rgba(153,85,255,0.5)';});
+    btnVoice.addEventListener('mouseover',function(){btnVoice.style.color='#00d8ff';});
+    btnVoice.addEventListener('mouseout',function(){btnVoice.style.color='rgba(0,216,255,0.35)';});
     // Show a dot if ElevenLabs key is already set
-    btnVoice.textContent='VOICE ●';
+    /* voice always ready */
   }
   const ppAdd=$('profile-add-btn'),ppSave=$('profile-save-btn'),ppClose=$('profile-close-btn'),botUser=$('bot-user-btn');
   if(ppAdd)ppAdd.addEventListener('click',addProfileField);
@@ -426,10 +426,10 @@ const SFX={
 };
 window.SFX=SFX;
 
-// VOICE — Local Web Speech API (browser built-in, zero latency, works offline)
+// VOICE — Local Web Speech API
 // ─────────────────────────────────────────────────────────────────────────────
-// Picks the best available voice on the device using a scoring system.
-// Tune speed/pitch/voice from the VOICE button in the bottom bar.
+// Picks the best available male/neutral voice on the device.
+// Settings adjustable via VOICE button in bottom bar.
 
 const GOOG_YT_API_KEY='AIzaSyB1W6o3kecSl-W0kFEG8v01XqQizpqwAE4';
 
@@ -447,32 +447,27 @@ function cleanTextForSpeech(text){
     .trim();
 }
 
-// Score available voices — higher = better. -1 = reject (female/unwanted).
 function scoreVoice(v){
   const n=v.name,l=v.lang||'';
-  // Reject female voices
-  if(/female|samantha|victoria|karen|zira|tessa|moira|fiona|veena|allison|ava|susan|kate|emily|joanna|ivy|kendra|kimberly|salli|nicole|aria|jenny|guy.*female/i.test(n))return -1;
+  if(/female|samantha|victoria|karen|zira|tessa|moira|fiona|veena|allison|ava|susan|kate|emily|joanna|ivy|kendra|kimberly|salli|nicole/i.test(n))return -1;
   let s=0;
-  // Tier 1 — best cross-platform male voices
   if(n==='Google UK English Male')s=100;
-  else if(n==='Daniel')s=98;              // macOS/iOS en-GB male
+  else if(n==='Daniel')s=98;
   else if(/Microsoft (Guy|Ryan|Liam|Steffan|Eric|Christopher|Davis|Tony|William|James|Mark)/i.test(n))s=95;
   else if(/Google.*Male/i.test(n))s=90;
-  else if(n==='Alex')s=85;               // macOS en-US
+  else if(n==='Alex')s=85;
   else if(/Microsoft.*(David|George|Stefan)/i.test(n))s=82;
   else if(/Microsoft.*English/i.test(n)&&!/Zira|Hazel/i.test(n))s=78;
   else if(l==='en-GB'&&s===0)s=72;
   else if(l==='en-AU'&&s===0)s=68;
   else if(l.startsWith('en')&&s===0)s=55;
-  // Slight boost for locally installed voices (not remote)
   if(!v.localService)s=Math.max(0,s-8);
   return s;
 }
 
-function findBestVoice(){
+function findMaleVoice(){
   const vv=speechSynthesis.getVoices();
   if(!vv||!vv.length)return null;
-  // Respect saved preference
   const saved=localStorage.getItem('jarvis_voice_name');
   if(saved){const found=vv.find(function(v){return v.name===saved;});if(found)return found;}
   let best=null,bestScore=-1;
@@ -480,9 +475,8 @@ function findBestVoice(){
   return bestScore>0?best:null;
 }
 
-function initVoice(){jVoice=findBestVoice();}
+function initVoice(){jVoice=findMaleVoice();}
 speechSynthesis.onvoiceschanged=initVoice;
-// Chrome loads voices async — retry several times
 setTimeout(initVoice,50);
 setTimeout(initVoice,300);
 setTimeout(initVoice,800);
@@ -498,11 +492,9 @@ function speak(text,force){
   showSpoke(clean);
   const words=(clean.match(/\S+/g)||[]).length;
   const restartDelay=1400+words*70;
+  if(!jVoice)jVoice=findMaleVoice();
 
-  if(!jVoice)jVoice=findBestVoice();
-
-  // Chrome bug: utterances > ~200 words get silently cut off.
-  // Split into sentences and chain them.
+  // Chrome cuts off long utterances — split at sentence boundaries and chain
   const sentences=clean.match(/[^.!?\n]+[.!?\n]*/g)||[clean];
   let idx=0;
 
@@ -517,15 +509,11 @@ function speak(text,force){
     if(!chunk){sayNext();return;}
     const u=new SpeechSynthesisUtterance(chunk);
     if(jVoice)u.voice=jVoice;
-    // Load saved settings
-    u.rate=parseFloat(localStorage.getItem('jarvis_tts_rate')||'0.95');
+    u.rate=parseFloat(localStorage.getItem('jarvis_tts_rate')||'0.92');
     u.pitch=parseFloat(localStorage.getItem('jarvis_tts_pitch')||'0.85');
     u.volume=1;
-    // Watchdog per chunk
     const chunkWords=(chunk.match(/\S+/g)||[]).length;
-    const wdog=setTimeout(function(){
-      if(speaking){speechSynthesis.cancel();sayNext();}
-    },chunkWords/2.5*1000+3000);
+    const wdog=setTimeout(function(){if(speaking){speechSynthesis.cancel();sayNext();}},chunkWords/2.5*1000+3000);
     u.onend=function(){clearTimeout(wdog);sayNext();};
     u.onerror=function(e){
       clearTimeout(wdog);
@@ -537,38 +525,43 @@ function speak(text,force){
   sayNext();
 }
 
+function showSpoke(text){
+  const s=text.split(/[.!?]/);
+  $('spoke-main').textContent=s[0].trim();
+  $('spoke-sub').textContent=(s[1]||'').trim();
+  $('spoke').classList.add('on');
+}
+function clearSpoke(){setTimeout(function(){$('spoke').classList.remove('on');},1400);}
+
 // ── Voice settings panel ──────────────────────────────────────────────────────
 function showVoiceSettings(){
   const old=document.getElementById('voice-settings-panel');
   if(old){old.remove();SFX.popupClose();return;}
   SFX.popupOpen();
-
   const vv=speechSynthesis.getVoices().filter(function(v){return v.lang.startsWith('en');});
   const savedName=localStorage.getItem('jarvis_voice_name')||(jVoice&&jVoice.name)||'';
-  const savedRate=localStorage.getItem('jarvis_tts_rate')||'0.95';
+  const savedRate=localStorage.getItem('jarvis_tts_rate')||'0.92';
   const savedPitch=localStorage.getItem('jarvis_tts_pitch')||'0.85';
-
   const voiceOpts=vv.map(function(v){
     const score=scoreVoice(v);
     const tag=score>=90?'★★★':score>=75?'★★':score>=50?'★':'';
-    return '<option value="'+v.name+'"'+(v.name===savedName?' selected':'')+'>'+tag+' '+v.name+(v.localService?' (local)':' (network)')+'</option>';
+    return '<option value="'+v.name+'"'+(v.name===savedName?' selected':'')+'>'+tag+' '+v.name+(v.localService?' (local)':' (net)')+'</option>';
   }).join('');
-
   const panel=document.createElement('div');
   panel.id='voice-settings-panel';
   panel.style.cssText="position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:400;background:rgba(0,4,16,0.98);border:1px solid rgba(0,216,255,0.35);border-radius:4px;padding:24px 28px;font-family:'Share Tech Mono',monospace;width:420px;max-height:80vh;display:flex;flex-direction:column;overflow:hidden;";
   panel.innerHTML=
     '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-shrink:0">'+
       '<div style="font-family:\'Orbitron\',monospace;font-size:11px;letter-spacing:0.3em;color:#00d8ff">◈ VOICE SETTINGS</div>'+
-      '<span id="vs-close" style="cursor:pointer;color:rgba(0,216,255,0.4);font-size:18px;padding:0 4px">✕</span>'+
+      '<span id="vs-close" style="cursor:pointer;color:rgba(0,216,255,0.4);font-size:18px">✕</span>'+
     '</div>'+
     '<div style="font-size:7px;color:rgba(0,216,255,0.35);margin-bottom:14px;line-height:1.8;flex-shrink:0">'+
       'Local browser TTS — zero latency, works offline.<br>'+
-      '<span style="color:rgba(0,216,255,0.5)">★★★ = best quality &nbsp; local = on-device (fastest)</span></div>'+
+      '<span style="color:rgba(0,216,255,0.5)">★★★ = best quality &nbsp;·&nbsp; local = on-device (fastest)</span></div>'+
     '<div style="overflow-y:auto;flex:1;display:flex;flex-direction:column;gap:12px">'+
     '<div>'+
       '<div style="font-size:7px;letter-spacing:0.2em;color:rgba(0,216,255,0.45);margin-bottom:5px">VOICE</div>'+
-      '<select id="vs-voice" style="width:100%;background:rgba(0,216,255,0.04);border:1px solid rgba(0,216,255,0.2);border-radius:2px;padding:7px 9px;font-family:\'Share Tech Mono\',monospace;font-size:8px;color:#00d8ff;outline:none;max-height:120px">'+voiceOpts+'</select>'+
+      '<select id="vs-voice" style="width:100%;background:rgba(0,216,255,0.04);border:1px solid rgba(0,216,255,0.2);border-radius:2px;padding:7px 9px;font-family:\'Share Tech Mono\',monospace;font-size:8px;color:#00d8ff;outline:none">'+voiceOpts+'</select>'+
     '</div>'+
     '<div>'+
       '<div style="font-size:7px;letter-spacing:0.2em;color:rgba(0,216,255,0.45);margin-bottom:4px">SPEED &nbsp;<span id="vs-rate-lbl" style="color:#00d8ff">'+savedRate+'</span></div>'+
@@ -586,51 +579,33 @@ function showVoiceSettings(){
     '</div>'+
     '<div id="vs-status" style="font-size:7px;color:rgba(0,216,255,0.35);text-align:center;min-height:14px;flex-shrink:0"></div>'+
     '</div>';
-
   document.body.appendChild(panel);
-
-  const setStatus=function(msg){const s=document.getElementById('vs-status');if(s)s.textContent=msg;};
-
+  const setStatus=function(m){const s=document.getElementById('vs-status');if(s)s.textContent=m;};
   document.getElementById('vs-close').addEventListener('click',function(){panel.remove();SFX.popupClose();});
-
-  document.getElementById('vs-rate').addEventListener('input',function(){
-    const l=document.getElementById('vs-rate-lbl');if(l)l.textContent=this.value;
-  });
-  document.getElementById('vs-pitch').addEventListener('input',function(){
-    const l=document.getElementById('vs-pitch-lbl');if(l)l.textContent=this.value;
-  });
-
+  document.getElementById('vs-rate').addEventListener('input',function(){const l=document.getElementById('vs-rate-lbl');if(l)l.textContent=this.value;});
+  document.getElementById('vs-pitch').addEventListener('input',function(){const l=document.getElementById('vs-pitch-lbl');if(l)l.textContent=this.value;});
   document.getElementById('vs-test').addEventListener('click',function(){
-    // Apply current slider values immediately for test
     const name=document.getElementById('vs-voice').value;
-    const rate=document.getElementById('vs-rate').value;
-    const pitch=document.getElementById('vs-pitch').value;
     localStorage.setItem('jarvis_voice_name',name);
-    localStorage.setItem('jarvis_tts_rate',rate);
-    localStorage.setItem('jarvis_tts_pitch',pitch);
-    jVoice=findBestVoice();
+    localStorage.setItem('jarvis_tts_rate',document.getElementById('vs-rate').value);
+    localStorage.setItem('jarvis_tts_pitch',document.getElementById('vs-pitch').value);
+    jVoice=findMaleVoice();
     setStatus('SPEAKING...');
     speak('Jarvis online. All systems nominal. Ready to assist, '+userName+'.',true);
     setTimeout(function(){setStatus('');},4000);
   });
-
   document.getElementById('vs-save').addEventListener('click',function(){
     const name=document.getElementById('vs-voice').value;
-    const rate=document.getElementById('vs-rate').value;
-    const pitch=document.getElementById('vs-pitch').value;
     localStorage.setItem('jarvis_voice_name',name);
-    localStorage.setItem('jarvis_tts_rate',rate);
-    localStorage.setItem('jarvis_tts_pitch',pitch);
-    jVoice=findBestVoice();
+    localStorage.setItem('jarvis_tts_rate',document.getElementById('vs-rate').value);
+    localStorage.setItem('jarvis_tts_pitch',document.getElementById('vs-pitch').value);
+    jVoice=findMaleVoice();
     setStatus('SAVED ✓');SFX.confirm();notif('VOICE SETTINGS SAVED');
     setTimeout(function(){panel.remove();SFX.popupClose();},700);
   });
-
   panel.addEventListener('click',function(e){if(e.target===panel){panel.remove();SFX.popupClose();}});
 }
 window.showVoiceSettings=showVoiceSettings;
-function showSpoke(text){const s=text.split(/[.!?]/);$('spoke-main').textContent=s[0].trim();$('spoke-sub').textContent=(s[1]||'').trim();$('spoke').classList.add('on');}
-function clearSpoke(){setTimeout(function(){$('spoke').classList.remove('on');},1400);}
 
 // MIC — FIX: guard restart with flag to prevent InvalidStateError
 let interimEl=null,recogRestartPending=false;
@@ -1530,7 +1505,7 @@ function runBootScreen(onDone){const screen=$('boot-screen'),logo=$('boot-logo')
 function boot(){
   hx=CX;hy=CY;
   SFX.boot();
-  initVoice();setTimeout(initVoice,600);
+  jVoice=findMaleVoice();setTimeout(function(){jVoice=findMaleVoice();},600);
   wireBotButtons();
   wireMusic();
   updateData();updateBattery();fetchWeather();
@@ -1539,7 +1514,7 @@ function boot(){
   initDraggablePanels();
   runBootScreen(function(){
     setTimeout(function(){initWebLLM(currentModel);},400);
-    setTimeout(function(){initVoice();speak('Welcome'+(userName?', '+userName:'')+'! Jarvis online. Loading AI model now.',true);},600);
+    setTimeout(function(){jVoice=findMaleVoice();speak('Welcome'+(userName?', '+userName:'')+'! Jarvis online. Loading AI model now.',true);},600);
     setTimeout(function(){runDailyBriefing();},8000);
   });
 }
